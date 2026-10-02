@@ -1,0 +1,59 @@
+# Render Blueprint: one web service. The PostgreSQL database is external, so DATABASE_URL is entered by hand.
+services:
+  - type: web
+    name: clinicalscribe
+    runtime: python
+    plan: free
+    # Python 3.11+ is required; Render reads the version from the PYTHON_VERSION variable below.
+    buildCommand: pip install -r requirements.txt
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: ENV
+        value: production
+      - key: STORAGE_BACKEND
+        value: s3
+      - key: SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false           # postgresql+psycopg://USER:PASSWORD@HOST/DB?sslmode=require
+      - key: ADMIN_BOOTSTRAP_EMAIL
+        sync: false
+      - key: ADMIN_BOOTSTRAP_PASSWORD
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_REGION
+        value: ap-south-1
+      - key: S3_BUCKET_NAME
+        sync: false
+      - key: PRESIGNED_URL_EXPIRY_SECONDS
+        value: "300"
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: STT_PROVIDER
+        value: elevenlabs
+      - key: STT_MODEL
+        value: scribe_v1
+      - key: STT_LANGUAGE
+        value: en
+      - key: MAX_AUDIO_MB
+        value: "25"
+      - key: DELETE_AUDIO_AFTER_TRANSCRIPTION
+        value: "false"
+      - key: VOICE_AGENT_PROVIDER
+        value: none           # set to elevenlabs together with the two ids below to enable voice
+      - key: ELEVENLABS_VOICE_ID
+        sync: false
+      - key: ELEVENLABS_AGENT_ID
+        sync: false

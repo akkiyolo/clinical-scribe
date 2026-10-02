@@ -1,0 +1,23 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv", ".venv-linux", "alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]  # line length is handled by black
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+extend-exclude = '''
+/(\.venv|\.venv-linux|alembic/versions)/
+'''
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::langchain_core._api.deprecation.LangChainPendingDeprecationWarning",
+]

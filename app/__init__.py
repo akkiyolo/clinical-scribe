@@ -1,0 +1,1 @@
+# ClinicalScribe application package

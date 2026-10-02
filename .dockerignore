@@ -1,0 +1,22 @@
+# Keep secrets, local state and bulky dev folders out of the build context and the image.
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+.venv
+.venv-linux
+.local_storage
+*.db
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.claude
+tests
+docs
+README.md
+requirements-dev.txt
+Dockerfile
+docker-compose.yml
+.dockerignore

@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <meta name="app-env" content="{{ env }}">
+    <meta name="voice-enabled" content="{{ voice_enabled }}">
+    <meta name="max-audio-mb" content="{{ max_audio_mb }}">
+    <meta name="color-scheme" content="light dark">
+    <title>{{ app_name }}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <a class="skip-link" href="#app">Skip to content</a>
+
+    <header id="navbar" class="navbar hidden">
+        <div class="navbar-inner">
+            <a class="nav-brand" href="#/" aria-label="ClinicalScribe home">
+                <span class="mark" aria-hidden="true">C</span>
+                <span class="nav-title">ClinicalScribe</span>
+            </a>
+            <button class="nav-toggle" id="nav-toggle" type="button" aria-label="Menu" aria-expanded="false" aria-controls="nav-links">
+                <i></i><i></i>
+            </button>
+            <nav class="nav-links" id="nav-links" aria-label="Main"></nav>
+            <div class="nav-user">
+                <span class="nav-avatar" id="nav-avatar" aria-hidden="true"></span>
+                <span class="nav-user-name" id="nav-user-name"></span>
+                <button class="btn btn-ghost btn-sm" id="btn-logout" type="button">Log out</button>
+            </div>
+        </div>
+    </header>
+
+    <div id="toast-container" class="toast-container" role="status" aria-live="polite"></div>
+
+    <div id="modal-overlay" class="modal-overlay hidden">
+        <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1">
+            <div class="modal-head">
+                <h2 id="modal-title"></h2>
+                <button class="modal-close" id="modal-close" type="button" aria-label="Close dialog">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body"></div>
+            <div class="modal-footer" id="modal-footer"></div>
+        </div>
+    </div>
+
+    <div id="loading-overlay" class="loading-overlay hidden" aria-hidden="true"><div class="loading-line"></div></div>
+
+    <main id="app" tabindex="-1"></main>
+
+    <!-- ===================== Public ===================== -->
+    <template id="view-login">
+        <div class="auth">
+            <aside class="auth-media">
+                <div class="mark mark-inverse" aria-hidden="true">C</div>
+                <div class="auth-media-copy">
+                    <h2>Consultations,<br><span>documented.</span></h2>
+                    <p>Record or paste a consultation, review an AI-drafted SOAP note, and approve the prescription yourself. Nothing reaches a patient without the doctor's approval.</p>
+                    <p class="auth-fineprint">Portfolio project. Synthetic data only. Not for real patient data or clinical use.</p>
+                </div>
+            </aside>
+            <section class="auth-form-wrap">
+                <div class="auth-form-inner">
+                    <div class="auth-head">
+                        <h1>Welcome back</h1>
+                        <p>Sign in to your account</p>
+                    </div>
+                    <form id="login-form" class="form" novalidate>
+                        <div class="banner rejected hidden" id="login-error" role="alert"></div>
+                        <div class="field">
+                            <label for="login-email">Email</label>
+                            <input type="email" id="login-email" name="email" required autocomplete="email" maxlength="255">
+                            <span class="field-error" data-error-for="email"></span>
+                        </div>
+                        <div class="field">
+                            <label for="login-password">Password</label>
+                            <input type="password" id="login-password" name="password" required autocomplete="current-password" maxlength="128">
+                            <span class="field-error" data-error-for="password"></span>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-block" id="login-submit">Sign in</button>
+                    </form>
+                    <p class="auth-switch">No account yet? <a href="#/register">Create one</a></p>
+                </div>
+            </section>
+        </div>
+    </template>
+
+    <template id="view-register">
+        <div class="auth">
+            <aside class="auth-media">
+                <div class="mark mark-inverse" aria-hidden="true">C</div>
+                <div class="auth-media-copy">
+                    <h2>Join the<br><span>workflow.</span></h2>
+                    <p>Patients book verified doctors and control who sees their records. Doctors submit a medical license that an administrator verifies before any clinical feature unlocks.</p>
+                    <p class="auth-fineprint">Portfolio project. Synthetic data only.</p>
+                </div>
+            </aside>
+            <section class="auth-form-wrap">
+                <div class="auth-form-inner wide">
+                    <div class="auth-head">
+                        <h1>Create account</h1>
+                        <p>Choose how you will use ClinicalScribe</p>
+                    </div>
+                    <div class="role-switch" id="role-toggle" role="radiogroup" aria-label="Account type">
+                        <button type="button" class="role-btn active" data-role="patient" role="radio" aria-checked="true">Patient</button>
+                        <button type="button" class="role-btn" data-role="doctor" role="radio" aria-checked="false">Doctor</button>
+                    </div>
+                    <form id="register-form" class="form" novalidate>
+                        <div class="banner rejected hidden" id="register-error" role="alert"></div>
+                        <input type="hidden" name="role" value="patient">
+                        <div class="grid-2">
+                            <div class="field">
+                                <label for="register-name">Full name</label>
+                                <input type="text" id="register-name" name="full_name" required maxlength="255" autocomplete="name">
+                                <span class="field-error" data-error-for="full_name"></span>
+                            </div>
+                            <div class="field">
+                                <label for="register-email">Email</label>
+                                <input type="email" id="register-email" name="email" required maxlength="255" autocomplete="email">
+                                <span class="field-error" data-error-for="email"></span>
+                            </div>
+                        </div>
+                        <div class="grid-2">
+                            <div class="field">
+                                <label for="register-password">Password</label>
+                                <input type="password" id="register-password" name="password" required minlength="8" maxlength="128" autocomplete="new-password" aria-describedby="password-hint">
+                                <span class="field-hint" id="password-hint">8 to 128 characters, with a letter and a digit</span>
+                                <span class="field-error" data-error-for="password"></span>
+                            </div>
+                            <div class="field">
+                                <label for="register-phone">Phone <em>optional</em></label>
+                                <input type="tel" id="register-phone" name="phone" maxlength="20" autocomplete="tel">
+                                <span class="field-error" data-error-for="phone"></span>
+                            </div>
+                        </div>
+
+                        <fieldset id="patient-fields" class="form fieldset">
+                            <legend class="rule-label"><span>About you (optional)</span></legend>
+                            <div class="grid-2">
+                                <div class="field">
+                                    <label for="register-dob">Date of birth</label>
+                                    <input type="date" id="register-dob" name="dob">
+                                    <span class="field-error" data-error-for="dob"></span>
+                                </div>
+                                <div class="field">
+                                    <label for="register-gender">Gender</label>
+                                    <select id="register-gender" name="gender">
+                                        <option value="">Prefer not to say</option>
+                                        <option value="male">Male</option>
+                                        <option value="female">Female</option>
+                                        <option value="other">Other</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="grid-2">
+                                <div class="field">
+                                    <label for="register-blood">Blood group</label>
+                                    <input type="text" id="register-blood" name="blood_group" maxlength="10" placeholder="e.g. B+">
+                                </div>
+                                <div class="field">
+                                    <label for="register-allergies">Allergies</label>
+                                    <input type="text" id="register-allergies" name="allergies" maxlength="2000" placeholder="e.g. Penicillin, Sulfa drugs">
+                                </div>
+                            </div>
+                        </fieldset>
+
+                        <fieldset id="doctor-fields" class="form fieldset hidden">
+                            <legend class="rule-label"><span>Medical license</span></legend>
+                            <div class="grid-2">
+                                <div class="field">
+                                    <label for="register-reg">Registration number</label>
+                                    <input type="text" id="register-reg" name="reg_number" maxlength="100">
+                                    <span class="field-error" data-error-for="reg_number"></span>
+                                </div>
+                                <div class="field">
+                                    <label for="register-council">Issuing council</label>
+                                    <input type="text" id="register-council" name="council" maxlength="255" placeholder="e.g. Maharashtra Medical Council">
+                                    <span class="field-error" data-error-for="council"></span>
+                                </div>
+                            </div>
+                            <div class="grid-2">
+                                <div class="field">
+                                    <label for="register-year">Registration year</label>
+                                    <input type="number" id="register-year" name="reg_year" min="1950" step="1">
+                                    <span class="field-error" data-error-for="reg_year"></span>
+                                </div>
+                                <div class="field">
+                                    <label for="register-spec">Specialization</label>
+                                    <input type="text" id="register-spec" name="specialization" maxlength="255">
+                                    <span class="field-error" data-error-for="specialization"></span>
+                                </div>
+                            </div>
+                            <div class="field">
+                                <label for="register-clinic">Clinic name <em>optional</em></label>
+                                <input type="text" id="register-clinic" name="clinic_name" maxlength="255">
+                            </div>
+                            <div class="grid-2">
+                                <div class="field">
+                                    <label for="register-clinic-address">Clinic address <em>optional</em></label>
+                                    <input type="text" id="register-clinic-address" name="clinic_address" maxlength="1000">
+                                </div>
+                                <div class="field">
+                                    <label for="register-clinic-phone">Clinic phone <em>optional</em></label>
+                                    <input type="tel" id="register-clinic-phone" name="clinic_phone" maxlength="20">
+                                </div>
+                            </div>
+                            <p class="field-hint">After registering you will upload your license certificate. An administrator must approve it before you can use any clinical feature.</p>
+                        </fieldset>
+
+                        <button type="submit" class="btn btn-primary btn-block" id="register-submit">Create account</button>
+                    </form>
+                    <p class="auth-switch">Already registered? <a href="#/login">Sign in</a></p>
+                </div>
+            </section>
+        </div>
+    </template>
+
+    <template id="view-not-found">
+        <div class="empty-page">
+            <h1>404</h1>
+            <p>That page does not exist.</p>
+            <a class="btn btn-primary" href="#/">Go home</a>
+        </div>
+    </template>
+
+    <!-- ===================== Patient ===================== -->
+    <template id="view-patient-dashboard">
+        <div class="page">
+            <header class="page-head">
+                <div><p class="mono">Patient</p><h1>Hello, <em data-slot="name"></em></h1><p class="sub">Your appointments, prescriptions and who can see your records.</p></div>
+                <a class="btn btn-primary" href="#/patient/doctors">Find a doctor</a>
+            </header>
+            <div class="stats" data-slot="stats"></div>
+            <div class="bento">
+                <section class="card" aria-labelledby="pd-next">
+                    <div class="card-head"><h2 id="pd-next">Next appointment</h2><a class="link-subtle" href="#/patient/appointments">All appointments</a></div>
+                    <div data-slot="next-appointment"></div>
+                </section>
+                <section class="card" aria-labelledby="pd-quick">
+                    <div class="card-head"><h2 id="pd-quick">Quick actions</h2></div>
+                    <div class="actions">
+                        <a class="action" href="#/patient/doctors">Find and book a doctor <span aria-hidden="true">&rarr;</span></a>
+                        <a class="action" href="#/patient/consents">Manage who sees my records <span aria-hidden="true">&rarr;</span></a>
+                        <a class="action" href="#/patient/prescriptions">My prescriptions <span aria-hidden="true">&rarr;</span></a>
+                        <a class="action" href="#/patient/report">Report a doctor <span aria-hidden="true">&rarr;</span></a>
+                    </div>
+                </section>
+                <section class="card bento-wide" aria-labelledby="pd-rx">
+                    <div class="card-head"><h2 id="pd-rx">Latest approved prescription</h2><a class="link-subtle" href="#/patient/prescriptions">All prescriptions</a></div>
+                    <div data-slot="latest-prescription"></div>
+                </section>
+                <section class="card" aria-labelledby="pd-consent">
+                    <div class="card-head"><h2 id="pd-consent">Doctors with access</h2><a class="link-subtle" href="#/patient/consents">Manage</a></div>
+                    <div data-slot="consent-summary"></div>
+                </section>
+            </div>
+        </div>
+    </template>
+
+    <template id="view-patient-doctors">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">Directory</p><h1>Verified doctors</h1><p class="sub">Only doctors verified by an administrator are listed.</p></div></header>
+            <form class="search-row" id="doctor-search" role="search">
+                <div class="grid-2 search-grid">
+                    <div class="field"><label for="doc-q">Name</label><input type="search" id="doc-q" name="q" maxlength="100"></div>
+                    <div class="field"><label for="doc-spec">Specialization</label><input type="search" id="doc-spec" name="specialization" maxlength="100"></div>
+                </div>
+                <button class="btn btn-secondary" type="submit">Search</button>
+            </form>
+            <div data-slot="list"></div>
+            <div data-slot="pager"></div>
+        </div>
+    </template>
+
+    <template id="view-patient-appointments">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">Appointments</p><h1>Your appointments</h1></div><button class="btn btn-primary" type="button" id="btn-book">Book an appointment</button></header>
+            <div data-slot="list"></div>
+            <div data-slot="pager"></div>
+        </div>
+    </template>
+
+    <template id="view-patient-prescriptions">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">Prescriptions</p><h1>Approved prescriptions</h1><p class="sub">You only see prescriptions your doctor has reviewed and approved.</p></div></header>
+            <div data-slot="list"></div>
+            <div data-slot="pager"></div>
+        </div>
+    </template>
+
+    <template id="view-patient-prescription-detail">
+        <div class="page">
+            <header class="page-head">
+                <div><p class="mono" data-slot="code"></p><h1 data-slot="title">Prescription</h1><p class="sub" data-slot="subtitle"></p></div>
+                <div class="row gap wrap" data-slot="actions"></div>
+            </header>
+            <div class="prescription-layout">
+                <div class="stack" data-slot="body"></div>
+                <aside class="stack">
+                    <section class="card" data-slot="voice" aria-labelledby="pd-voice"></section>
+                    <section class="card" aria-labelledby="pd-versions"><div class="card-head"><h2 id="pd-versions">Versions</h2></div><div data-slot="versions"></div></section>
+                </aside>
+            </div>
+        </div>
+    </template>
+
+    <template id="view-patient-consents">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">Privacy</p><h1>Who can see your records</h1><p class="sub">A doctor can only work with your data while your consent is active. Revoking takes effect immediately; prescriptions you already received stay yours.</p></div><button class="btn btn-primary" type="button" id="btn-grant">Grant access</button></header>
+            <div data-slot="list"></div>
+            <div data-slot="pager"></div>
+        </div>
+    </template>
+
+    <template id="view-patient-report">
+        <div class="page narrow">
+            <header class="page-head"><div><p class="mono">Safety</p><h1>Report a doctor</h1><p class="sub">Reports go to an administrator. Choose the consult only if your report is about it.</p></div></header>
+            <form id="report-form" class="card form form-card" novalidate>
+                <div class="banner rejected hidden" id="report-error" role="alert"></div>
+                <div class="field"><label for="report-doctor">Doctor</label><select id="report-doctor" name="doctor_id" required></select><span class="field-error" data-error-for="doctor_id"></span></div>
+                <div class="field"><label for="report-consult">Related consult <em>optional</em></label><select id="report-consult" name="consult_id"><option value="">Not about a specific consult</option></select></div>
+                <div class="field"><label for="report-reason">Reason</label><input id="report-reason" name="reason" required minlength="5" maxlength="255"><span class="field-error" data-error-for="reason"></span></div>
+                <div class="field"><label for="report-details">Details <em>optional</em></label><textarea id="report-details" name="details" rows="5" maxlength="5000"></textarea></div>
+                <div class="row gap"><button class="btn btn-primary" type="submit">Submit report</button><a class="btn btn-ghost" href="#/patient">Cancel</a></div>
+            </form>
+        </div>
+    </template>
+
+    <template id="view-patient-profile">
+        <div class="page narrow">
+            <header class="page-head"><div><p class="mono">Account</p><h1>Your profile</h1></div></header>
+            <section class="card form-card">
+                <div class="profile-row">
+                    <div class="avatar-lg" data-slot="avatar" aria-hidden="true"></div>
+                    <div><label class="btn btn-secondary btn-sm file-button">Change photo<input type="file" id="photo-input" accept="image/jpeg,image/png,image/webp" class="visually-hidden"></label><p class="field-hint">JPG, PNG or WebP, up to 5 MB</p><div data-slot="photo-progress"></div></div>
+                </div>
+                <form id="profile-form" class="form" novalidate>
+                    <div class="grid-2">
+                        <div class="field"><label for="prof-name">Full name</label><input id="prof-name" name="full_name" maxlength="255" required></div>
+                        <div class="field"><label for="prof-email">Email</label><input id="prof-email" type="email" disabled></div>
+                    </div>
+                    <div class="grid-2">
+                        <div class="field"><label for="prof-phone">Phone</label><input id="prof-phone" name="phone" maxlength="20" type="tel"></div>
+                        <div class="field" data-patient-only><label for="prof-dob">Date of birth</label><input id="prof-dob" name="dob" type="date"></div>
+                    </div>
+                    <div class="grid-2" data-patient-only>
+                        <div class="field"><label for="prof-gender">Gender</label><select id="prof-gender" name="gender"><option value="">Prefer not to say</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option></select></div>
+                        <div class="field"><label for="prof-blood">Blood group</label><input id="prof-blood" name="blood_group" maxlength="10"></div>
+                    </div>
+                    <div class="field" data-patient-only><label for="prof-allergies">Allergies</label><textarea id="prof-allergies" name="allergies" rows="3" maxlength="2000" placeholder="Comma separated, e.g. Penicillin, Sulfa drugs"></textarea><span class="field-hint">Used by the safety check on prescriptions drafted for you.</span></div>
+                    <div class="row gap"><button class="btn btn-primary" type="submit">Save changes</button></div>
+                </form>
+            </section>
+        </div>
+    </template>
+
+    <!-- ===================== Doctor ===================== -->
+    <template id="view-doctor-verification">
+        <div class="page narrow">
+            <header class="page-head"><div><p class="mono">License verification</p><h1>Verify your license</h1><p class="sub">Clinical features unlock after an administrator approves your license.</p></div></header>
+            <div class="banner" id="verification-banner" role="status"></div>
+            <section class="card form-card">
+                <form id="verification-form" class="form" novalidate>
+                    <div class="grid-2">
+                        <div class="field"><label for="ver-reg">Registration number</label><input id="ver-reg" name="reg_number" maxlength="100"></div>
+                        <div class="field"><label for="ver-council">Issuing council</label><input id="ver-council" name="council" maxlength="255"></div>
+                    </div>
+                    <div class="grid-2">
+                        <div class="field"><label for="ver-year">Registration year</label><input id="ver-year" name="reg_year" type="number" min="1950" step="1"></div>
+                        <div class="field"><label for="ver-spec">Specialization</label><input id="ver-spec" name="specialization" maxlength="255"></div>
+                    </div>
+                    <div class="field"><label for="ver-clinic">Clinic name</label><input id="ver-clinic" name="clinic_name" maxlength="255"></div>
+                    <div class="grid-2">
+                        <div class="field"><label for="ver-address">Clinic address</label><input id="ver-address" name="clinic_address" maxlength="1000"></div>
+                        <div class="field"><label for="ver-phone">Clinic phone</label><input id="ver-phone" name="clinic_phone" maxlength="20" type="tel"></div>
+                    </div>
+                    <div class="row gap" data-slot="form-actions"><button class="btn btn-secondary" type="submit" id="ver-save">Save details</button></div>
+                </form>
+            </section>
+            <section class="card form-card">
+                <div class="card-head"><h2>License certificate</h2></div>
+                <p class="field-hint">PDF, JPG or PNG, up to 10 MB. Uploading a new file keeps the previous one on record.</p>
+                <p data-slot="license-status"></p>
+                <label class="btn btn-secondary file-button">Upload certificate<input type="file" id="ver-license" accept="application/pdf,image/jpeg,image/png" class="visually-hidden"></label>
+                <div data-slot="license-progress"></div>
+            </section>
+            <section class="card form-card">
+                <div class="card-head"><h2>Profile photo <em class="optional">optional</em></h2></div>
+                <p class="field-hint">Shown on your prescriptions. JPG, PNG or WebP, up to 5 MB.</p>
+                <p data-slot="photo-status"></p>
+                <label class="btn btn-secondary file-button">Upload photo<input type="file" id="ver-photo" accept="image/jpeg,image/png,image/webp" class="visually-hidden"></label>
+                <div data-slot="photo-progress"></div>
+            </section>
+            <div class="row gap" data-slot="resubmit"></div>
+        </div>
+    </template>
+
+    <template id="view-doctor-dashboard">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">Doctor</p><h1>Good day, <em data-slot="name"></em></h1><p class="sub">Appointments for today and consults that need you.</p></div><a class="btn btn-primary" href="#/doctor/consult/new">New consult</a></header>
+            <div class="stats" data-slot="stats"></div>
+            <div class="bento">
+                <section class="card" aria-labelledby="dd-appts"><div class="card-head"><h2 id="dd-appts">Today's appointments</h2></div><div data-slot="appointments"></div></section>
+                <section class="card" aria-labelledby="dd-actions"><div class="card-head"><h2 id="dd-actions">Needs your action</h2></div><div data-slot="needs-action"></div></section>
+            </div>
+        </div>
+    </template>
+
+    <template id="view-doctor-patients">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">Patients</p><h1>Patients who consented</h1><p class="sub">You only see patients who currently allow you access.</p></div></header>
+            <div data-slot="list"></div>
+            <div data-slot="pager"></div>
+        </div>
+    </template>
+
+    <template id="view-doctor-patient-detail">
+        <div class="page narrow">
+            <header class="page-head"><div><p class="mono">Patient</p><h1 data-slot="name"></h1><p class="sub" data-slot="subtitle"></p></div><div class="row gap" data-slot="actions"></div></header>
+            <section class="card form-card" data-slot="details"></section>
+            <section class="card form-card"><div class="card-head"><h2>Consults with this patient</h2></div><div data-slot="consults"></div></section>
+        </div>
+    </template>
+
+    <template id="view-doctor-consult-new">
+        <div class="page narrow">
+            <header class="page-head"><div><p class="mono">New consult</p><h1>Start a consult</h1><p class="sub">Choose a consenting patient. Next you can record audio, upload a file or paste a transcript.</p></div></header>
+            <form id="new-consult-form" class="card form form-card" novalidate>
+                <div class="banner rejected hidden" id="new-consult-error" role="alert"></div>
+                <div class="field"><label for="nc-patient">Patient</label><select id="nc-patient" name="patient_id" required></select><span class="field-error" data-error-for="patient_id"></span></div>
+                <div class="field"><label for="nc-appointment">Appointment <em>optional</em></label><select id="nc-appointment" name="appointment_id"><option value="">Not linked to an appointment</option></select></div>
+                <div class="row gap"><button class="btn btn-primary" type="submit">Start consult</button><a class="btn btn-ghost" href="#/doctor">Cancel</a></div>
+            </form>
+        </div>
+    </template>
+
+    <template id="view-doctor-consult-detail">
+        <div class="page">
+            <header class="page-head"><div><p class="mono" data-slot="meta"></p><h1 data-slot="title">Consult</h1></div><div class="row gap" data-slot="actions"></div></header>
+            <ol class="stepper" data-slot="stepper" aria-label="Consult progress">
+                <li class="step" data-step="transcript"><span class="n">1</span>Transcript</li>
+                <li class="step" data-step="soap"><span class="n">2</span>SOAP note</li>
+                <li class="step" data-step="prescription"><span class="n">3</span>Prescription</li>
+            </ol>
+            <div data-slot="banners"></div>
+            <div data-slot="content"></div>
+        </div>
+    </template>
+
+    <template id="view-doctor-prescription-review">
+        <div class="page wide">
+            <header class="page-head">
+                <div><p class="mono" data-slot="meta"></p><h1 data-slot="title">Prescription review</h1><p class="sub" data-slot="subtitle"></p></div>
+                <div class="row gap wrap" data-slot="top-actions"></div>
+            </header>
+            <div data-slot="banners"></div>
+            <div class="prescription-layout">
+                <div class="stack">
+                    <section class="card form-card" aria-labelledby="rx-editor-title"><div class="card-head"><h2 id="rx-editor-title">Prescription</h2></div><div data-slot="editor"></div></section>
+                    <section class="card form-card" aria-labelledby="rx-actions-title"><div class="card-head"><h2 id="rx-actions-title">Decision</h2></div><div data-slot="decision"></div></section>
+                </div>
+                <aside class="stack">
+                    <section class="card" aria-labelledby="rx-flags-title"><div class="card-head"><h2 id="rx-flags-title">AI safety flags</h2></div><div data-slot="flags"></div></section>
+                    <section class="card" aria-labelledby="rx-transcript-title"><div class="card-head"><h2 id="rx-transcript-title">Source transcript</h2></div><div class="transcript" data-slot="transcript" tabindex="0"></div></section>
+                    <section class="card" aria-labelledby="rx-versions-title"><div class="card-head"><h2 id="rx-versions-title">Versions</h2></div><div data-slot="versions"></div></section>
+                </aside>
+            </div>
+        </div>
+    </template>
+
+    <template id="view-doctor-history">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">History</p><h1>Consults and prescriptions</h1></div></header>
+            <div data-slot="list"></div>
+            <div data-slot="pager"></div>
+        </div>
+    </template>
+
+    <template id="view-doctor-profile">
+        <div class="page narrow">
+            <header class="page-head"><div><p class="mono">Account</p><h1>Your profile</h1></div><a class="btn btn-secondary" href="#/doctor/verification">License and clinic details</a></header>
+            <section class="card form-card">
+                <div class="profile-row">
+                    <div class="avatar-lg" data-slot="avatar" aria-hidden="true"></div>
+                    <div><label class="btn btn-secondary btn-sm file-button">Change photo<input type="file" id="photo-input" accept="image/jpeg,image/png,image/webp" class="visually-hidden"></label><p class="field-hint">Shown on your prescriptions</p><div data-slot="photo-progress"></div></div>
+                </div>
+                <form id="profile-form" class="form" novalidate>
+                    <div class="grid-2">
+                        <div class="field"><label for="prof-name">Full name</label><input id="prof-name" name="full_name" maxlength="255" required></div>
+                        <div class="field"><label for="prof-email">Email</label><input id="prof-email" type="email" disabled></div>
+                    </div>
+                    <div class="field"><label for="prof-phone">Phone</label><input id="prof-phone" name="phone" maxlength="20" type="tel"></div>
+                    <div class="row gap"><button class="btn btn-primary" type="submit">Save changes</button></div>
+                </form>
+            </section>
+        </div>
+    </template>
+
+    <!-- ===================== Admin ===================== -->
+    <template id="view-admin-dashboard">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">Administration</p><h1>Overview</h1></div></header>
+            <div class="stats stats-4" data-slot="stats"></div>
+            <div class="bento">
+                <section class="card" aria-labelledby="ad-queue"><div class="card-head"><h2 id="ad-queue">Oldest pending licenses</h2><a class="link-subtle" href="#/admin/verification">Open queue</a></div><div data-slot="queue"></div></section>
+                <section class="card" aria-labelledby="ad-reports"><div class="card-head"><h2 id="ad-reports">Open reports</h2><a class="link-subtle" href="#/admin/reports">All reports</a></div><div data-slot="reports"></div></section>
+            </div>
+        </div>
+    </template>
+
+    <template id="view-admin-verification-queue">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">License review</p><h1>Verification queue</h1><p class="sub">Pending doctors, oldest first. Registry checks are evidence only; they never approve anyone.</p></div></header>
+            <div data-slot="list"></div>
+            <div data-slot="pager"></div>
+        </div>
+    </template>
+
+    <template id="view-admin-verification-detail">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">License review</p><h1 data-slot="name"></h1><p class="sub" data-slot="subtitle"></p></div><div class="row gap wrap" data-slot="actions"></div></header>
+            <div class="banner" data-slot="banner"></div>
+            <div class="bento">
+                <section class="card form-card" aria-labelledby="ad-submitted"><div class="card-head"><h2 id="ad-submitted">Submitted details</h2></div><dl class="facts" data-slot="details"></dl></section>
+                <section class="card form-card" aria-labelledby="ad-evidence"><div class="card-head"><h2 id="ad-evidence">Registry evidence</h2></div><div data-slot="evidence"></div></section>
+                <section class="card form-card" aria-labelledby="ad-docs"><div class="card-head"><h2 id="ad-docs">Documents</h2></div><div data-slot="documents"></div></section>
+                <section class="card form-card" aria-labelledby="ad-history"><div class="card-head"><h2 id="ad-history">History</h2></div><ol class="timeline" data-slot="history"></ol></section>
+            </div>
+        </div>
+    </template>
+
+    <template id="view-admin-doctors">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">Doctors</p><h1>Doctor management</h1></div></header>
+            <form class="search-row" id="doctors-filter" role="search">
+                <div class="grid-2 search-grid">
+                    <div class="field"><label for="adm-status">Status</label><select id="adm-status" name="status"><option value="">All</option><option value="pending">Pending</option><option value="verified">Verified</option><option value="rejected">Rejected</option><option value="suspended">Suspended</option></select></div>
+                    <div class="field"><label for="adm-q">Name or email</label><input id="adm-q" name="q" type="search" maxlength="100"></div>
+                </div>
+                <button class="btn btn-secondary" type="submit">Filter</button>
+            </form>
+            <div data-slot="list"></div>
+            <div data-slot="pager"></div>
+        </div>
+    </template>
+
+    <template id="view-admin-reports">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">Reports</p><h1>Patient reports</h1></div></header>
+            <form class="search-row" id="reports-filter">
+                <div class="field"><label for="rep-state">Show</label><select id="rep-state" name="state"><option value="open">Open</option><option value="resolved">Resolved</option><option value="all">All</option></select></div>
+            </form>
+            <div data-slot="list"></div>
+            <div data-slot="pager"></div>
+        </div>
+    </template>
+
+    <template id="view-admin-report-detail">
+        <div class="page narrow">
+            <header class="page-head"><div><p class="mono">Report</p><h1 data-slot="title"></h1><p class="sub" data-slot="subtitle"></p></div><a class="btn btn-ghost" href="#/admin/reports">Back to reports</a></header>
+            <section class="card form-card" data-slot="summary"></section>
+            <section class="card form-card" data-slot="consult"></section>
+            <section class="card form-card" data-slot="resolve"></section>
+        </div>
+    </template>
+
+    <template id="view-admin-audit">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">Security</p><h1>Audit log</h1><p class="sub">Append-only record of sign-ins, verification decisions, file access and clinical actions.</p></div></header>
+            <form class="search-row filters" id="audit-filter">
+                <div class="field"><label for="aud-action">Action</label><input id="aud-action" name="action" maxlength="100" placeholder="e.g. prescription.approve"></div>
+                <div class="field"><label for="aud-actor">Actor id</label><input id="aud-actor" name="actor" maxlength="36"></div>
+                <div class="field"><label for="aud-resource">Resource type</label><input id="aud-resource" name="resource_type" maxlength="50"></div>
+                <div class="field"><label for="aud-from">From</label><input id="aud-from" name="from" type="date"></div>
+                <div class="field"><label for="aud-to">To</label><input id="aud-to" name="to" type="date"></div>
+                <button class="btn btn-secondary" type="submit">Apply</button>
+            </form>
+            <div data-slot="list"></div>
+            <div data-slot="pager"></div>
+        </div>
+    </template>
+
+    <script src="/static/main.js" defer></script>
+</body>
+</html>

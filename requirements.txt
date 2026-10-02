@@ -1,0 +1,38 @@
+# Runtime dependencies (pinned). Development and test tools live in requirements-dev.txt.
+
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# Database
+SQLAlchemy==2.0.36
+alembic==1.14.1
+psycopg[binary]==3.2.4
+
+# Validation and configuration
+pydantic==2.10.5
+pydantic-settings==2.7.1
+
+# Templating (serves index.html only)
+Jinja2==3.1.5
+
+# Authentication and security
+argon2-cffi==23.1.0
+PyJWT==2.10.1
+slowapi==0.1.9
+
+# File storage
+boto3==1.36.14
+
+# Prescription documents
+python-docx==1.1.2
+
+# HTTP client (ElevenLabs and the LLM provider)
+httpx==0.28.1
+
+# Registry name matching
+rapidfuzz==3.11.0
+
+# Prescription agent pipeline
+langgraph==0.2.62
