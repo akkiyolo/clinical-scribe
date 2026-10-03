@@ -6,7 +6,8 @@ services:
     plan: free
     # Python 3.11+ is required; Render reads the version from the PYTHON_VERSION variable below.
     buildCommand: pip install -r requirements.txt
-    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # Migrates, creates the first admin from ADMIN_BOOTSTRAP_* (idempotent), then starts uvicorn.
+    startCommand: sh scripts/start.sh
     healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION

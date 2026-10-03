@@ -160,7 +160,7 @@ class TestEnvExample:
     }
 
     def keys(self) -> set[str]:
-        text = (ROOT / ".env.example").read_text()
+        text = (ROOT / ".env.example").read_text(encoding="utf-8")
         return set(re.findall(r"^([A-Z][A-Z0-9_]+)=", text, flags=re.MULTILINE))
 
     def test_contains_every_key_from_the_spec(self):
@@ -176,12 +176,12 @@ class TestEnvExample:
         assert all(key in Settings.model_fields for key in self.keys())
 
     def test_contains_only_fake_values(self):
-        text = (ROOT / ".env.example").read_text()
+        text = (ROOT / ".env.example").read_text(encoding="utf-8")
         assert "AKIAXXXXXXXXXXXXXXXX" in text and "change-me" in text
         assert not re.search(r"AKIA[A-Z0-9]{16}", text.replace("AKIAXXXXXXXXXXXXXXXX", ""))
 
     def test_dot_env_is_git_ignored_and_example_is_not(self):
-        ignore = (ROOT / ".gitignore").read_text().splitlines()
+        ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
         assert ".env" in ignore and ".env.example" not in ignore
 
 
@@ -189,11 +189,20 @@ class TestDeployConfig:
     def test_render_blueprint_is_valid_and_production_safe(self):
         import yaml
 
-        blueprint = yaml.safe_load((ROOT / "render.yaml").read_text())
+        blueprint = yaml.safe_load((ROOT / "render.yaml").read_text(encoding="utf-8"))
         service = blueprint["services"][0]
         env = {e["key"]: e for e in service["envVars"]}
         assert service["healthCheckPath"] == "/healthz"
-        assert service["startCommand"].startswith("alembic upgrade head && uvicorn app.main:app")
+        assert service["startCommand"] == "sh scripts/start.sh"
+        raw = (ROOT / "scripts/start.sh").read_bytes()
+        assert b"\r" not in raw  # CRLF line endings would break sh on Linux
+        start = raw.decode("utf-8")
+        steps = [
+            start.index("alembic upgrade head"),
+            start.index("python -m scripts.create_admin"),
+            start.index("exec uvicorn app.main:app"),
+        ]
+        assert steps == sorted(steps) and "--proxy-headers" in start
         assert env["ENV"]["value"] == "production" and env["STORAGE_BACKEND"]["value"] == "s3"
         assert (
             env["LLM_PROVIDER"]["value"] == "gemini"
@@ -212,8 +221,8 @@ class TestDeployConfig:
         assert all(key.upper() in Settings.model_fields or key == "PYTHON_VERSION" for key in env)
 
     def test_runtime_requirements_are_pinned_and_dev_tools_are_separate(self):
-        runtime = (ROOT / "requirements.txt").read_text()
-        dev = (ROOT / "requirements-dev.txt").read_text()
+        runtime = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+        dev = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
         packages = [line for line in runtime.splitlines() if line and not line.startswith("#")]
         assert packages and all("==" in line for line in packages)
         assert not re.search(

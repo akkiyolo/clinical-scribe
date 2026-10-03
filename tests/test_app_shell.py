@@ -14,9 +14,9 @@ from app.main import create_app
 from tests.conftest import Api, new_patient
 
 ROOT = Path(__file__).resolve().parents[1]
-INDEX = (ROOT / "app/templates/index.html").read_text()
-MAIN_JS = (ROOT / "app/static/main.js").read_text()
-STYLE = (ROOT / "app/static/style.css").read_text()
+INDEX = (ROOT / "app/templates/index.html").read_text(encoding="utf-8")
+MAIN_JS = (ROOT / "app/static/main.js").read_text(encoding="utf-8")
+STYLE = (ROOT / "app/static/style.css").read_text(encoding="utf-8")
 
 
 class TestShell:

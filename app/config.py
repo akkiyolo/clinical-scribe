@@ -131,6 +131,7 @@ def validate_production(settings: Settings) -> None:
         "AWS_ACCESS_KEY_ID": settings.AWS_ACCESS_KEY_ID,
         "AWS_SECRET_ACCESS_KEY": settings.AWS_SECRET_ACCESS_KEY,
         "LLM_API_KEY": settings.LLM_API_KEY,
+        "LLM_MODEL": settings.LLM_MODEL,
         "ADMIN_BOOTSTRAP_PASSWORD": settings.ADMIN_BOOTSTRAP_PASSWORD,
     }
     if settings.STT_PROVIDER == "elevenlabs" or settings.VOICE_AGENT_PROVIDER == "elevenlabs":

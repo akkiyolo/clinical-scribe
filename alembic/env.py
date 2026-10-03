@@ -14,7 +14,8 @@ config = context.config
 
 # Override sqlalchemy.url from our settings
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# ConfigParser treats "%" as interpolation, so escape it (URL-encoded passwords contain "%").
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 # Python logging
 if config.config_file_name is not None:

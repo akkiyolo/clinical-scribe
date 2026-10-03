@@ -123,6 +123,17 @@ In production the app **refuses to start** if a required secret is missing or st
    ```
 4. Note: Render's free Postgres instances **expire** after a limited period; export what you need or use a paid plan for anything you want to keep.
 
+## Deploying to Render
+
+`render.yaml` is a Render Blueprint for one Python web service.
+
+1. Push this repository to GitHub, then in Render choose **New → Blueprint** and select the repo.
+2. Render prompts for every `sync: false` variable. Fill in at least: `SECRET_KEY` (32+ random characters), `DATABASE_URL` (with `?sslmode=require`), `ADMIN_BOOTSTRAP_EMAIL` / `ADMIN_BOOTSTRAP_PASSWORD` (12+ characters, letters and digits), the AWS keys and `S3_BUCKET_NAME`, `LLM_API_KEY`, `LLM_MODEL` and `ELEVENLABS_API_KEY`. Voice IDs can stay empty while `VOICE_AGENT_PROVIDER=none`.
+3. Deploy. The start command, `sh scripts/start.sh`, runs `alembic upgrade head`, creates the first admin from `ADMIN_BOOTSTRAP_*` (skipped if it already exists), and starts uvicorn on `$PORT` with proxy headers trusted so rate limits see the real client IP. Render's health check calls `/healthz`, which also pings the database.
+4. If the service exits at startup, read the deploy log: production validation names the missing or placeholder variable (`FATAL: …`).
+
+Keep the service at **one instance / one worker**: background jobs and rate limits live in process memory. On the free plan the service sleeps when idle, so the first request after a pause is slow. The Docker image (`Dockerfile`) uses the same `scripts/start.sh` entrypoint if you prefer a Docker runtime.
+
 The migrations are written for PostgreSQL (native enums, JSONB, partial unique indexes) and also run on SQLite for local work. On PostgreSQL the `audit_logs` and `verification_events` tables additionally reject UPDATE, DELETE and TRUNCATE through triggers.
 
 ## S3 bucket and IAM policy
@@ -213,5 +224,3 @@ Real ABDM HPR integration for license checks; email verification, password reset
 ## Future work
 
 Appointment slots and calendar sync, e-signature of approved prescriptions, pharmacy hand-off, multilingual SOAP/prescription output, automated browser tests, and an admin analytics view.
-#   c l i n i c - s c r i b e  
- 
