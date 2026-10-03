@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     ENV: Literal["development", "production"] = "development"
     SECRET_KEY: str = "change-me-long-random-string"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    # Opt-in: create the synthetic demo accounts (password DemoPass123) on startup, even in
+    # production. Only for a public portfolio demo that holds no real data.
+    DEMO_DATA: bool = False
     CLINIC_TIMEZONE: str = "Asia/Kolkata"  # doctors' weekly hours are in this time zone
 
     # --- Database ---

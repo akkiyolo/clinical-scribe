@@ -74,8 +74,12 @@ def _doctor(db, email, name, reg_number, council, year, specialization, verified
 
 
 def seed_demo() -> None:
-    if get_settings().is_production:
-        raise SystemExit("seed_demo refuses to run when ENV=production")
+    settings = get_settings()
+    if settings.is_production and not settings.DEMO_DATA:
+        raise SystemExit(
+            "seed_demo refuses to run when ENV=production unless DEMO_DATA=true "
+            "(demo accounts have a published password; only for a synthetic-data demo)"
+        )
 
     seed_registry()
     with SessionLocal() as db:

@@ -17,5 +17,10 @@ alembic upgrade head
 
 python -m scripts.create_admin || echo "WARNING: admin bootstrap skipped (see the error above)"
 
+# Opt-in demo accounts for a synthetic-data portfolio deployment (idempotent).
+case "${DEMO_DATA:-false}" in
+    true|True|TRUE|1|yes) python -m scripts.seed_demo || echo "WARNING: demo data not loaded" ;;
+esac
+
 export FORWARDED_ALLOW_IPS="${FORWARDED_ALLOW_IPS:-*}"
 exec uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}" --proxy-headers

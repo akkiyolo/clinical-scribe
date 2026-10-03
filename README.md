@@ -95,6 +95,7 @@ Demo accounts created by `seed_demo` (all synthetic, password `DemoPass123`): `d
 | `ENV` | `development` or `production`. Production turns on `Secure` cookies, HSTS, strict startup validation and hides `/docs` |
 | `SECRET_KEY` | Signs JWTs and CSRF tokens. Production needs 32+ random characters |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Session lifetime (default 60) |
+| `DEMO_DATA` | `true` creates the synthetic demo accounts (password `DemoPass123`) on every start, even in production. Only for a public demo with synthetic data; leave `false` otherwise |
 | `CLINIC_TIMEZONE` | IANA time zone of doctors' weekly hours and appointment slots (default `Asia/Kolkata`) |
 | `DATABASE_URL` | `postgresql+psycopg://…?sslmode=require` (a `postgres://` or `postgresql://` URL is normalised). `sslmode=require` is mandatory for non-local hosts in production. SQLite is accepted for local runs |
 | `ADMIN_BOOTSTRAP_EMAIL` / `_PASSWORD` | Used once by `scripts/create_admin.py`; weak passwords are refused |
@@ -131,7 +132,8 @@ In production the app **refuses to start** if a required secret is missing or st
 1. Push this repository to GitHub, then in Render choose **New → Blueprint** and select the repo.
 2. Render prompts for every `sync: false` variable. Fill in at least: `SECRET_KEY` (32+ random characters), `DATABASE_URL` (with `?sslmode=require`), `ADMIN_BOOTSTRAP_EMAIL` / `ADMIN_BOOTSTRAP_PASSWORD` (12+ characters, letters and digits), the AWS keys and `S3_BUCKET_NAME`, `LLM_API_KEY`, `LLM_MODEL` and `ELEVENLABS_API_KEY`. Voice IDs can stay empty while `VOICE_AGENT_PROVIDER=none`.
 3. Deploy. The start command, `sh scripts/start.sh`, runs `alembic upgrade head`, creates the first admin from `ADMIN_BOOTSTRAP_*` (skipped if it already exists), and starts uvicorn on `$PORT` with proxy headers trusted so rate limits see the real client IP. Render's health check calls `/healthz`, which also pings the database.
-4. If the service exits at startup, read the deploy log: production validation names the missing or placeholder variable (`FATAL: …`).
+4. **Demo accounts on Render (optional):** set `DEMO_DATA=true` and redeploy. The start script then loads the demo doctors and patients (all `DemoPass123`). Anyone who reads this README can sign in with them, so use it only for a synthetic-data demo.
+5. If the service exits at startup, read the deploy log: production validation names the missing or placeholder variable (`FATAL: …`).
 
 Keep the service at **one instance / one worker**: background jobs and rate limits live in process memory. On the free plan the service sleeps when idle, so the first request after a pause is slow. The Docker image (`Dockerfile`) uses the same `scripts/start.sh` entrypoint if you prefer a Docker runtime.
 

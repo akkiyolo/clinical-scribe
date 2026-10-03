@@ -173,6 +173,7 @@ class TestEnvExample:
             "LLM_BASE_URL",
             "LOCAL_STORAGE_DIR",
             "CLINIC_TIMEZONE",
+            "DEMO_DATA",
         }
         assert all(key in Settings.model_fields for key in self.keys())
 
@@ -203,6 +204,7 @@ class TestDeployConfig:
             start.index("python -m scripts.create_admin"),
             start.index("exec uvicorn app.main:app"),
         ]
+        assert "scripts.seed_demo" in start and "DEMO_DATA" in start
         assert steps == sorted(steps) and "--proxy-headers" in start
         assert env["ENV"]["value"] == "production" and env["STORAGE_BACKEND"]["value"] == "s3"
         assert (

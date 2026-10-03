@@ -24,6 +24,8 @@ services:
         sync: false
       - key: ADMIN_BOOTSTRAP_PASSWORD
         sync: false
+      - key: DEMO_DATA
+        value: "false"        # "true" creates the synthetic demo doctors/patients (password DemoPass123)
       - key: AWS_ACCESS_KEY_ID
         sync: false
       - key: AWS_SECRET_ACCESS_KEY

@@ -343,3 +343,24 @@ class TestScripts:
 
     def test_the_admin_fixture_is_a_real_admin(self):
         assert new_admin().get("/api/admin/stats").status_code == 200
+
+
+class TestDemoDataOptIn:
+    def test_seed_demo_refuses_production_unless_demo_data_is_enabled(self, monkeypatch):
+        import scripts.seed_demo as seed
+
+        settings = get_settings()
+        monkeypatch.setattr(settings, "ENV", "production")
+        monkeypatch.setattr(settings, "DEMO_DATA", False)
+        with pytest.raises(SystemExit, match="DEMO_DATA=true"):
+            seed.seed_demo()
+
+        called = []
+        monkeypatch.setattr(settings, "DEMO_DATA", True)
+        monkeypatch.setattr(seed, "seed_registry", lambda: called.append("registry"))
+        monkeypatch.setattr(
+            seed, "SessionLocal", lambda: (_ for _ in ()).throw(RuntimeError("stop"))
+        )
+        with pytest.raises(RuntimeError, match="stop"):  # got past the production guard
+            seed.seed_demo()
+        assert called == ["registry"]
