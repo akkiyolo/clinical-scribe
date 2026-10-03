@@ -99,6 +99,8 @@ function handleAuthFailure(status, message, opts) {
   if (status === 401) {
     state.user = null;
     if (!['/login', '/register'].includes(currentPath())) go('/login');
+  } else if (status === 403 && /insufficient permissions|only (patients|doctors)/i.test(message)) {
+    checkSessionOwner(); // usually another tab signed in as a different account
   } else if (status === 403 && /not verified/i.test(message) && ['doctor', 'patient'].includes(state.user?.role)) {
     const target = state.user.role === 'doctor' ? '/doctor/verification' : '/patient/verification';
     refreshUser().then(() => {
@@ -164,6 +166,25 @@ function uploadFile(path, file, onProgress) {
     xhr.addEventListener('error', () => reject(new ApiError(0, 'Network error. Check your connection and try again.')));
     xhr.send(form);
   });
+}
+
+/** The session cookie is shared by every tab. If another tab signed in as someone else, this tab is
+ *  now acting as that account: say so once and move to the right home page instead of failing every call. */
+let sessionCheck = null;
+function checkSessionOwner() {
+  if (!state.user || sessionCheck) return sessionCheck;
+  const before = state.user;
+  sessionCheck = apiGet('/api/auth/me', { keepSession: true })
+    .then((now) => {
+      if (now.id === before.id) return;
+      state.user = now;
+      renderNav();
+      toast(`You are now signed in as ${now.full_name} (${now.role}) because another tab signed in. Use a separate browser profile or a private window to stay signed in as two people at once.`, 'info', 10000);
+      goHome();
+    })
+    .catch((err) => { if (err.status === 401) { state.user = null; go('/login'); } })
+    .finally(() => { sessionCheck = null; });
+  return sessionCheck;
 }
 
 async function refreshUser() {
@@ -2908,6 +2929,8 @@ function bootstrap() {
   });
   $('#btn-logout').addEventListener('click', logout);
   window.addEventListener('hashchange', handleRoute);
+  // Coming back to this tab: another tab may have signed out or signed in as someone else.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkSessionOwner(); });
   window.addEventListener('unhandledrejection', (event) => {
     if (event.reason instanceof ApiError) { event.preventDefault(); if (event.reason.status !== 401) toast(event.reason.message, 'error'); }
   });
