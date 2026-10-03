@@ -7,6 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -35,6 +36,7 @@ class Settings(BaseSettings):
     ENV: Literal["development", "production"] = "development"
     SECRET_KEY: str = "change-me-long-random-string"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    CLINIC_TIMEZONE: str = "Asia/Kolkata"  # doctors' weekly hours are in this time zone
 
     # --- Database ---
     DATABASE_URL: str
@@ -83,6 +85,15 @@ class Settings(BaseSettings):
         v = re.sub(r"^postgresql://", "postgresql+psycopg://", v)
         # Don't double-transform if already correct
         v = v.replace("postgresql+psycopg+psycopg://", "postgresql+psycopg://")
+        return v
+
+    @field_validator("CLINIC_TIMEZONE")
+    @classmethod
+    def validate_timezone(cls, v: str) -> str:
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError(f"CLINIC_TIMEZONE {v!r} is not a known IANA time zone")
         return v
 
     @field_validator("SECRET_KEY", mode="after")

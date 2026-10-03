@@ -99,9 +99,10 @@ function handleAuthFailure(status, message, opts) {
   if (status === 401) {
     state.user = null;
     if (!['/login', '/register'].includes(currentPath())) go('/login');
-  } else if (status === 403 && /not verified/i.test(message) && state.user?.role === 'doctor') {
+  } else if (status === 403 && /not verified/i.test(message) && ['doctor', 'patient'].includes(state.user?.role)) {
+    const target = state.user.role === 'doctor' ? '/doctor/verification' : '/patient/verification';
     refreshUser().then(() => {
-      if (currentPath() !== '/doctor/verification') go('/doctor/verification');
+      if (currentPath() !== target) go(target);
     });
   }
 }
@@ -504,24 +505,28 @@ function homePath() {
   const user = state.user;
   if (!user) return '/login';
   if (user.role === 'doctor' && user.doctor_status !== 'verified') return '/doctor/verification';
+  if (user.role === 'patient' && user.patient_status !== 'verified') return '/patient/verification';
   return HOME[user.role] || '/login';
 }
 const goHome = () => go(homePath());
+const patientVerified = () => state.user?.role === 'patient' && state.user.patient_status === 'verified';
 
 function navItems() {
   const user = state.user;
   if (user.role === 'patient') {
-    return [['/patient', 'Dashboard'], ['/patient/doctors', 'Doctors'], ['/patient/appointments', 'Appointments'],
+    const items = [['/patient', 'Dashboard'], ['/patient/doctors', 'Doctors'], ['/patient/appointments', 'Appointments'],
       ['/patient/prescriptions', 'Prescriptions'], ['/patient/consents', 'Consents'], ['/patient/report', 'Report'],
       ['/patient/profile', 'Profile']];
+    return patientVerified() ? items : [['/patient/verification', 'Verify identity'], ...items];
   }
   if (user.role === 'doctor') {
     if (user.doctor_status !== 'verified') return [['/doctor/verification', 'Verification'], ['/doctor/profile', 'Profile']];
-    return [['/doctor', 'Dashboard'], ['/doctor/patients', 'Patients'], ['/doctor/consult/new', 'New consult'],
-      ['/doctor/history', 'History'], ['/doctor/verification', 'License'], ['/doctor/profile', 'Profile']];
+    return [['/doctor', 'Dashboard'], ['/doctor/appointments', 'Appointments'], ['/doctor/availability', 'Availability'],
+      ['/doctor/patients', 'Patients'], ['/doctor/consult/new', 'New consult'], ['/doctor/history', 'History'],
+      ['/doctor/verification', 'License'], ['/doctor/profile', 'Profile']];
   }
-  return [['/admin', 'Overview'], ['/admin/verification', 'Verification'], ['/admin/doctors', 'Doctors'],
-    ['/admin/reports', 'Reports'], ['/admin/audit', 'Audit log']];
+  return [['/admin', 'Overview'], ['/admin/patients', 'Patients'], ['/admin/verification', 'Licenses'],
+    ['/admin/doctors', 'Doctors'], ['/admin/reports', 'Reports'], ['/admin/audit', 'Audit log']];
 }
 
 function renderNav() {
@@ -571,8 +576,10 @@ async function handleRoute() {
     try { state.user = await apiGet('/api/auth/me', { keepSession: true }); } catch (_) { go('/login'); return; }
     if (navId !== state.navId) return;
   }
-  if (state.user && state.user.role === 'doctor' && state.user.doctor_status !== 'verified' && !PUBLIC_PATHS.has(path)) {
-    await refreshUser(); // an administrator may have approved this doctor since the last check
+  const awaitingReview = state.user && ((state.user.role === 'doctor' && state.user.doctor_status !== 'verified')
+    || (state.user.role === 'patient' && state.user.patient_status !== 'verified'));
+  if (awaitingReview && !PUBLIC_PATHS.has(path)) {
+    await refreshUser(); // an administrator may have approved this account since the last check
     if (navId !== state.navId) return;
   }
   if (state.user && (PUBLIC_PATHS.has(path) || path === '/')) { goHome(); return; }
@@ -713,7 +720,7 @@ route('/register', {
         try {
           state.user = await apiPost('/api/auth/register', values, { keepSession: true });
           await refreshUser();
-          toast(values.role === 'doctor' ? 'Account created. Upload your license next.' : 'Account created', 'success');
+          toast(values.role === 'doctor' ? 'Account created. Upload your license next.' : 'Account created. Upload your ID to get verified.', 'success');
           goHome();
         } catch (err) {
           applyServerErrors(form, err, banner);
@@ -739,51 +746,118 @@ function statTile(label, value, foot, href) {
   return href ? h('a', { class: 'stat', href: `#${href}` }, children) : h('div', { class: 'stat' }, children);
 }
 
-function localInputToIso(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+/* ── booking: patients pick one of a doctor's open slots ── */
+const fmtDay = (isoDate) => new Date(`${isoDate}T00:00:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+
+/** Slot picker for one doctor at a time. onPick(slot | null) fires whenever the choice changes. */
+function slotPicker(onPick) {
+  const node = h('div', { class: 'slot-picker', 'aria-live': 'polite' });
+  let chosen = null;
+  let doctorId = null;
+  async function load(id) {
+    doctorId = id;
+    chosen = null;
+    onPick(null);
+    clear(node).append(skeleton(1));
+    try {
+      const data = await apiGet(`/api/doctors/${enc(id)}/slots?days=14`);
+      if (doctorId !== id) return;
+      clear(node);
+      if (!data.days.length) {
+        node.append(data.has_schedule
+          ? emptyState('Fully booked', 'There are no open slots in the next two weeks. Try another doctor or check back later.')
+          : emptyState('No open hours yet', 'This doctor has not published their weekly hours yet.'));
+        return;
+      }
+      node.append(h('p', { class: 'small', text: `Times are clinic time (${data.timezone}).` }));
+      const buttons = [];
+      for (const day of data.days) {
+        const grid = h('div', { class: 'slot-grid', role: 'group', 'aria-label': fmtDay(day.date) });
+        for (const slot of day.slots) {
+          const button = h('button', { type: 'button', class: 'slot', text: slot.time, 'aria-pressed': 'false' });
+          button.addEventListener('click', () => {
+            buttons.forEach((b) => b.setAttribute('aria-pressed', 'false'));
+            button.setAttribute('aria-pressed', 'true');
+            chosen = { ...slot, date: day.date };
+            onPick(chosen);
+          });
+          buttons.push(button);
+          grid.append(button);
+        }
+        node.append(h('div', { class: 'slot-day' }, h('h3', { class: 'slot-day-title', text: fmtDay(day.date) }), grid));
+      }
+    } catch (err) {
+      if (doctorId !== id) return;
+      clear(node).append(h('div', { class: 'banner rejected', role: 'alert', text: err.message }));
+    }
+  }
+  return { node, load, selected: () => chosen, reload: () => (doctorId ? load(doctorId) : null) };
 }
 
-function defaultAppointmentTime() {
-  const date = new Date(Date.now() + 24 * 3600 * 1000);
-  date.setMinutes(0, 0, 0);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:00`;
-}
-
-/** Book an appointment. `doctor` pre-selects a doctor; otherwise the patient picks from the directory. */
+/** Book an appointment. `doctor` pre-selects a doctor; otherwise the patient picks from the directory.
+ *  Resolves to true when an appointment was booked. */
 async function bookAppointment(doctor = null) {
-  let doctors = doctor ? [doctor] : (await apiGet('/api/doctors?limit=100')).items;
+  if (!patientVerified()) {
+    toast('An administrator must verify your identity before you can book.', 'error');
+    go('/patient/verification');
+    return false;
+  }
+  const doctors = doctor ? [doctor] : (await apiGet('/api/doctors?limit=100')).items;
   if (!doctors.length) { toast('No verified doctors are available yet.', 'error'); return false; }
-  const fields = [
-    ...(doctor ? [] : [{ name: 'doctor_id', label: 'Doctor', type: 'select', required: true,
-      options: doctors.map((d) => ({ value: d.id, label: `${d.full_name} – ${d.specialization}` })) }]),
-    { name: 'scheduled_at', label: 'Date and time', type: 'datetime-local', required: true, value: defaultAppointmentTime() },
-    { name: 'reason_for_visit', label: 'Reason for visit', type: 'textarea', optional: true, rows: 3, maxLength: 1000 },
-    { name: 'grant_consent', label: 'Also let this doctor see my records so they can document my visit', type: 'checkbox', value: true,
-      help: 'You can revoke access at any time under Consents.' },
-  ];
-  let booked = false;
-  await dialog({
-    title: doctor ? `Book with ${doctor.full_name}` : 'Book an appointment', fields, confirmLabel: 'Book appointment',
-    validate: (v) => {
-      const iso = localInputToIso(v.scheduled_at);
-      return !iso || new Date(iso) < new Date() ? { scheduled_at: 'Choose a date and time in the future' } : {};
-    },
-    perform: async (v) => {
-      const doctorId = doctor ? doctor.id : v.doctor_id;
-      try {
-        await apiPost('/api/appointments', { doctor_id: doctorId, scheduled_at: localInputToIso(v.scheduled_at), reason_for_visit: v.reason_for_visit || null });
-        if (v.grant_consent) {
-          try { await apiPost('/api/consents', { doctor_id: doctorId }); } catch (err) { if (err.status !== 409) throw err; }
+
+  return new Promise((resolve) => {
+    let booked = false;
+    const errorBox = h('div', { class: 'banner rejected hidden', role: 'alert' });
+    const confirm = h('button', { type: 'button', class: 'btn btn-primary', text: 'Book appointment' });
+    confirm.disabled = true;
+    const picked = h('p', { class: 'small', text: 'Choose a time.' });
+    const picker = slotPicker((slot) => {
+      confirm.disabled = !slot;
+      picked.textContent = slot ? `Selected: ${fmtDay(slot.date)} at ${slot.time} (${slot.minutes} min)` : 'Choose a time.';
+    });
+    const doctorSelect = doctor ? null : h('select', { id: 'book-doctor', name: 'doctor_id' },
+      doctors.map((d) => h('option', { value: d.id, text: `${d.full_name} – ${d.specialization}` })));
+    const currentDoctor = () => (doctor ? doctor.id : doctorSelect.value);
+    if (doctorSelect) doctorSelect.addEventListener('change', () => picker.load(currentDoctor()));
+    const reason = h('textarea', { id: 'book-reason', name: 'reason_for_visit', rows: '3', maxlength: '1000' });
+    const consent = h('input', { id: 'book-consent', type: 'checkbox' });
+    consent.checked = true;
+
+    const body = h('div', { class: 'form' },
+      doctorSelect ? h('div', { class: 'field' }, h('label', { for: 'book-doctor', text: 'Doctor' }), doctorSelect) : null,
+      h('div', { class: 'field' }, h('span', { class: 'label', text: 'Open slots' }), picker.node, picked),
+      h('div', { class: 'field' }, h('label', { for: 'book-reason' }, 'Reason for visit', h('em', { text: 'optional' })), reason),
+      h('div', { class: 'field' },
+        h('label', { class: 'check', for: 'book-consent' }, consent, h('span', { text: 'Also let this doctor see my records so they can document my visit' })),
+        h('span', { class: 'field-hint', text: 'You can revoke access at any time under Consents.' })),
+      errorBox);
+    const cancel = h('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel', on: { click: () => closeModal() } });
+
+    confirm.addEventListener('click', async () => {
+      const slot = picker.selected();
+      if (!slot) return;
+      hideBanner(errorBox);
+      await withBusy(confirm, async () => {
+        const doctorId = currentDoctor();
+        try {
+          await apiPost('/api/appointments', { doctor_id: doctorId, scheduled_at: slot.start, reason_for_visit: reason.value.trim() || null });
+        } catch (err) {
+          showBanner(errorBox, err.message);
+          if (err.status === 409) picker.reload(); // someone else took it: show what is still open
+          return;
         }
         booked = true;
-        toast('Appointment requested. The doctor will confirm it.', 'success');
-        return null;
-      } catch (err) { return err.message; }
-    },
+        if (consent.checked) {
+          try { await apiPost('/api/consents', { doctor_id: doctorId }); } catch (err) { if (err.status !== 409) toast(`Booked, but access was not granted: ${err.message}`, 'error'); }
+        }
+        toast(`Appointment confirmed for ${fmtDay(slot.date)} at ${slot.time}.`, 'success');
+        closeModal();
+      });
+    });
+
+    openModal({ title: doctor ? `Book with ${doctor.full_name}` : 'Book an appointment', body, footer: [cancel, confirm], onClose: () => resolve(booked) });
+    picker.load(currentDoctor());
   });
-  return booked;
 }
 
 route('/patient', {
@@ -792,6 +866,12 @@ route('/patient', {
   roles: PATIENT,
   async render(ctx) {
     setText('name', (state.user.full_name || '').split(' ')[0]);
+    if (!patientVerified()) {
+      fill('verify-banner', h('div', { class: `banner ${state.user.patient_status === 'rejected' ? 'rejected' : 'pending'}`, role: 'status' },
+        h('strong', { text: state.user.patient_status === 'rejected' ? 'Your ID was not accepted. ' : 'Your identity is not verified yet. ' }),
+        'You can book appointments and share your records once an administrator approves your ID.',
+        h('div', { class: 'row' }, linkTo('/patient/verification', 'Go to verification', 'btn btn-primary btn-sm'))));
+    }
     fill('stats', skeleton(1));
     const [appointments, prescriptions, consents] = await Promise.all([
       apiGet('/api/appointments?limit=100'), apiGet('/api/prescriptions?limit=1'), apiGet('/api/consents?limit=100'),
@@ -1113,6 +1193,64 @@ async function renderProfile(ctx) {
 
 route('/patient/profile', { template: 'view-patient-profile', title: 'Profile', roles: PATIENT, render: renderProfile });
 
+/* ── identity verification ── */
+route('/patient/verification', {
+  template: 'view-patient-verification',
+  title: 'Verify your identity',
+  roles: PATIENT,
+  async render(ctx) {
+    async function load() {
+      const [v, profile] = await Promise.all([apiGet('/api/patient/verification'), apiGet('/api/me/profile')]);
+      if (!ctx.isCurrent()) return null;
+      const banner = slot('banner');
+      banner.className = `banner ${v.status}`;
+      clear(banner);
+      if (v.status === 'verified') {
+        banner.append(h('strong', { text: `Verified${v.verified_at ? ` on ${fmtDate(v.verified_at)}` : ''}. ` }),
+          'You can book appointments and share your records with doctors.',
+          h('div', { class: 'row' }, linkTo('/patient/doctors', 'Find a doctor', 'btn btn-primary btn-sm')));
+      } else if (v.status === 'rejected') {
+        banner.append(h('strong', { text: 'Not accepted. ' }), h('div', { text: v.rejection_reason || '' }),
+          h('div', { text: 'Check your profile details, then upload a clearer or different ID to resubmit.' }));
+      } else {
+        banner.append(h('strong', { text: 'Pending review. ' }), v.id_document_file_id
+          ? 'An administrator will check your ID. This page updates automatically once you are verified.'
+          : 'Upload a government ID below so an administrator can verify you.');
+      }
+      fill('details', ...[['Name', profile.full_name], ['Date of birth', profile.dob], ['Gender', profile.gender], ['Phone', profile.phone], ['Email', profile.email]]
+        .flatMap(([label, value]) => [h('dt', { text: label }), h('dd', { text: dash(value) })]));
+      fill('document-status', v.id_document_file_id
+        ? h('span', null, badge('on file', 'ok'), ' ', v.submitted_at ? h('span', { class: 'small', text: `uploaded ${fmtDateTime(v.submitted_at)} ` }) : null,
+          fileLink(v.id_document_file_id, 'View', 'link-subtle'))
+        : badge('not uploaded', 'pending'));
+      if (v.status === 'verified') {
+        fill('upload');
+      } else {
+        const input = h('input', { type: 'file', id: 'pv-file', accept: 'application/pdf,image/jpeg,image/png', class: 'visually-hidden' });
+        fill('upload', h('label', { class: 'btn btn-primary file-button' }, v.id_document_file_id ? 'Upload a different ID' : 'Upload ID', input));
+        wireUpload({ input, progressSlot: slot('upload-progress'), path: '/api/patient/id-document', maxMB: 10,
+          accept: ['application/pdf', 'image/jpeg', 'image/png'],
+          onDone: async () => { toast('ID uploaded. An administrator will review it.', 'success'); await refreshUser(); await load(); } });
+      }
+      return v;
+    }
+
+    const first = await load();
+    if (first && first.status !== 'verified') {
+      poll(async () => {
+        const previous = state.user?.patient_status;
+        await refreshUser();
+        if (state.user?.patient_status !== previous) {
+          toast(state.user.patient_status === 'verified' ? 'You are verified. You can book appointments now.' : 'Your verification status changed.', 'success');
+          handleRoute();
+          return true;
+        }
+        return false;
+      }, 15000);
+    }
+  },
+});
+
 /* ═══════════════ 8. Doctor views ═══════════════ */
 
 const DOCTOR = ['doctor'];
@@ -1234,19 +1372,11 @@ route('/doctor', {
       statTile('To review', needs.transcript_ready + needs.soap_ready + needs.prescription_ready, 'transcripts, notes and prescriptions'),
       statTile('Patients', dash_.patients, 'with active consent', '/doctor/patients'));
 
-    async function setAppointment(appointment, status, button) {
-      await withBusy(button, async () => {
-        try { await apiPatch(`/api/appointments/${appointment.id}`, { status }); toast(`Appointment ${status}`, 'success'); handleRoute(); } catch (err) { toast(err.message, 'error'); }
-      });
-    }
     fill('appointments', dash_.appointments_today.length
       ? dash_.appointments_today.map((a) => h('div', { class: 'list-item' },
         h('div', { class: 'meta' }, h('strong', { text: a.patient_name }), h('span', { class: 'small', text: `${fmtDateTime(a.scheduled_at)}${a.reason_for_visit ? ` · ${a.reason_for_visit}` : ''}` })),
-        h('div', { class: 'cell-actions' }, badge(a.status),
-          a.status === 'requested' ? h('button', { class: 'btn btn-secondary btn-sm', type: 'button', text: 'Confirm', on: { click: (e) => setAppointment(a, 'confirmed', e.currentTarget) } }) : null,
-          a.status === 'confirmed' ? linkTo(`/doctor/consult/new?patient=${enc(a.patient_id)}&appointment=${enc(a.id)}`, 'Start consult', 'btn btn-primary btn-sm') : null,
-          a.status === 'confirmed' ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: 'Mark completed', on: { click: (e) => setAppointment(a, 'completed', e.currentTarget) } }) : null)))
-      : emptyState('Nothing scheduled today', 'Confirmed appointments for today appear here.'));
+        h('div', { class: 'cell-actions' }, badge(a.status), doctorAppointmentActions(a, () => handleRoute()))))
+      : emptyState('Nothing scheduled today', 'Booked appointments for today appear here.', linkTo('/doctor/appointments', 'All appointments', 'btn btn-secondary btn-sm')));
 
     const actionable = consults.items.map((c) => [c, consultNeedsAction(c)]).filter(([, why]) => why);
     fill('needs-action', actionable.length
@@ -1877,6 +2007,169 @@ route('/doctor/prescription/:id', {
   },
 });
 
+/* ── appointments ── */
+/** Action buttons for one of the doctor's appointments; `done` reloads whatever list shows it. */
+function doctorAppointmentActions(a, done) {
+  const set = (status, button) => withBusy(button, async () => {
+    try { await apiPatch(`/api/appointments/${a.id}`, { status }); toast(`Appointment ${status}`, 'success'); done(); } catch (err) { toast(err.message, 'error'); }
+  });
+  const open = ['requested', 'confirmed'].includes(a.status);
+  return h('div', { class: 'cell-actions' },
+    a.status === 'requested' ? h('button', { class: 'btn btn-secondary btn-sm', type: 'button', text: 'Confirm', on: { click: (e) => set('confirmed', e.currentTarget) } }) : null,
+    a.status === 'confirmed' ? linkTo(`/doctor/consult/new?patient=${enc(a.patient_id)}&appointment=${enc(a.id)}`, 'Start consult', 'btn btn-primary btn-sm') : null,
+    a.status === 'confirmed' ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: 'Mark completed', on: { click: (e) => set('completed', e.currentTarget) } }) : null,
+    open ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: 'Cancel', on: { click: async (e) => {
+      const button = e.currentTarget;
+      if (!(await confirmDialog({ title: 'Cancel appointment?', confirmLabel: 'Cancel appointment', cancelLabel: 'Keep it', danger: true,
+        message: `Cancel ${a.patient_name || 'the patient'}'s appointment on ${fmtDateTime(a.scheduled_at)}? The slot opens up for other patients.` }))) return;
+      set('cancelled', button);
+    } } }) : null);
+}
+
+route('/doctor/appointments', {
+  template: 'view-doctor-appointments',
+  title: 'Appointments',
+  roles: DOCTOR,
+  verifiedOnly: true,
+  render() {
+    const form = $('#doctor-appointments-filter');
+    const list = pagedList({
+      target: slot('list'), pager: slot('pager'),
+      load: (limit, offset) => apiGet(`/api/appointments?when=${enc(form.elements.when.value)}&limit=${limit}&offset=${offset}`),
+      empty: emptyState('No appointments', 'Patients book your open slots; their appointments appear here.', linkTo('/doctor/availability', 'Set your hours', 'btn btn-secondary btn-sm')),
+      render: (items) => renderTable({
+        rows: items,
+        columns: [
+          { label: 'Patient', cell: (a) => h('strong', { text: a.patient_name || '—' }) },
+          { label: 'When', cell: (a) => h('span', null, fmtDateTime(a.scheduled_at), a.duration_minutes ? h('span', { class: 'sub', text: `${a.duration_minutes} min` }) : null), class: 'nowrap' },
+          { label: 'Reason', cell: (a) => dash(a.reason_for_visit) },
+          { label: 'Status', cell: (a) => badge(a.status) },
+          { label: '', cell: (a) => doctorAppointmentActions(a, () => list.reload()) },
+        ],
+      }),
+    });
+    form.elements.when.addEventListener('change', () => list.reload(0));
+    form.addEventListener('submit', (e) => e.preventDefault());
+  },
+});
+
+/* ── availability: weekly hours and time off ── */
+const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+route('/doctor/availability', {
+  template: 'view-doctor-availability',
+  title: 'Availability',
+  roles: DOCTOR,
+  verifiedOnly: true,
+  async render(ctx) {
+    let data = await apiGet('/api/doctor/availability');
+    if (!ctx.isCurrent()) return;
+    const toRows = (rules) => rules.map((r) => ({ weekday: r.weekday, start_time: r.start_time, end_time: r.end_time, slot_minutes: r.slot_minutes }));
+    let rows = toRows(data.rules);
+    setText('subtitle', `Set your weekly hours once, in clinic time (${data.timezone}). Patients book the open slots; days you mark as time off are hidden.`);
+
+    async function summarise() {
+      const summary = slot('summary');
+      try {
+        const slots = await apiGet(`/api/doctors/${enc(state.user.id)}/slots?days=14`);
+        if (!ctx.isCurrent()) return;
+        const count = slots.days.reduce((n, d) => n + d.slots.length, 0);
+        summary.className = `banner ${count ? 'info' : 'pending'}`;
+        summary.textContent = !slots.has_schedule
+          ? 'You have no weekly hours yet, so patients cannot book you. Add your hours below.'
+          : `Patients can book ${count} open slot${count === 1 ? '' : 's'} with you in the next 14 days.`;
+      } catch (err) { summary.textContent = err.message; }
+    }
+
+    const rulesEl = slot('rules');
+    const rulesError = slot('rules-error');
+    function rowNode(rule, index) {
+      const weekday = h('select', { class: 'input', 'aria-label': 'Day' }, WEEKDAY_NAMES.map((name, d) => h('option', { value: String(d), text: name })));
+      weekday.value = String(rule.weekday);
+      const start = h('input', { class: 'input', type: 'time', step: '300', 'aria-label': 'From', value: rule.start_time });
+      const end = h('input', { class: 'input', type: 'time', step: '300', 'aria-label': 'To', value: rule.end_time });
+      const length = h('select', { class: 'input', 'aria-label': 'Slot length' }, data.slot_choices.map((m) => h('option', { value: String(m), text: `${m} min slots` })));
+      length.value = String(rule.slot_minutes);
+      const sync = () => { rows[index] = { weekday: Number(weekday.value), start_time: start.value, end_time: end.value, slot_minutes: Number(length.value) }; };
+      [weekday, start, end, length].forEach((el) => el.addEventListener('change', sync));
+      return h('div', { class: 'schedule-row' }, weekday, start, h('span', { class: 'small', text: 'to' }), end, length,
+        h('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: 'Remove', 'aria-label': `Remove ${WEEKDAY_NAMES[rule.weekday]} ${rule.start_time}`, on: { click: () => { rows.splice(index, 1); draw(); } } }));
+    }
+    function draw() {
+      clear(rulesEl);
+      rulesError.textContent = '';
+      if (!rows.length) rulesEl.append(emptyState('No weekly hours', 'Add the hours when patients can book you.'));
+      rows.forEach((rule, i) => rulesEl.append(rowNode(rule, i)));
+    }
+    const save = h('button', { class: 'btn btn-primary', type: 'button', text: 'Save weekly hours' });
+    save.addEventListener('click', () => withBusy(save, async () => {
+      rulesError.textContent = '';
+      if (rows.some((r) => !r.start_time || !r.end_time)) { rulesError.textContent = 'Fill in a start and end time on every row.'; return; }
+      try {
+        data = await apiPut('/api/doctor/availability', { rules: rows });
+        rows = toRows(data.rules);
+        draw();
+        toast('Weekly hours saved', 'success');
+        summarise();
+      } catch (err) { rulesError.textContent = err.message.replace(/^rules(\.\d+)?: /, ''); }
+    }));
+    fill('rule-actions',
+      h('button', { class: 'btn btn-secondary', type: 'button', text: 'Add hours', on: { click: () => {
+        const last = rows[rows.length - 1];
+        rows.push(last ? { ...last, weekday: (last.weekday + 1) % 7 } : { weekday: 0, start_time: '10:00', end_time: '13:00', slot_minutes: 30 });
+        draw();
+      } } }),
+      h('button', { class: 'btn btn-ghost', type: 'button', text: 'Add Mon–Fri 10:00–13:00', on: { click: () => {
+        for (let d = 0; d < 5; d += 1) rows.push({ weekday: d, start_time: '10:00', end_time: '13:00', slot_minutes: 30 });
+        draw();
+      } } }),
+      save);
+
+    function drawTimeOff() {
+      fill('time-off', data.time_off.length
+        ? h('div', null, data.time_off.map((off) => h('div', { class: 'list-item' },
+          h('div', { class: 'meta' },
+            h('strong', { text: off.start_date === off.end_date ? fmtDay(off.start_date) : `${fmtDay(off.start_date)} – ${fmtDay(off.end_date)}` }),
+            off.reason ? h('span', { class: 'small', text: off.reason }) : null),
+          h('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: 'Remove', on: { click: (e) => withBusy(e.currentTarget, async () => {
+            try {
+              await apiDelete(`/api/doctor/time-off/${enc(off.id)}`);
+              data.time_off = data.time_off.filter((t) => t.id !== off.id);
+              drawTimeOff();
+              toast('Time off removed', 'success');
+              summarise();
+            } catch (err) { toast(err.message, 'error'); }
+          }) } }))))
+        : h('p', { class: 'small', text: 'No upcoming time off.' }));
+    }
+
+    const form = $('#time-off-form');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      clearFieldErrors(form);
+      const values = readForm(form);
+      if (!values.start_date) return setFieldError(form, 'start_date', 'Choose the first day');
+      if (!values.end_date) values.end_date = values.start_date;
+      await withBusy(form.querySelector('[type=submit]'), async () => {
+        try {
+          const added = await apiPost('/api/doctor/time-off', values);
+          data.time_off = [...data.time_off, added].sort((a, b) => a.start_date.localeCompare(b.start_date));
+          form.reset();
+          drawTimeOff();
+          summarise();
+          if (added.conflicting_appointments) {
+            toast(`You already have ${added.conflicting_appointments} appointment(s) on those days. Cancel them under Appointments if you cannot see those patients.`, 'info', 9000);
+          } else toast('Time off added', 'success');
+        } catch (err) { applyServerErrors(form, err); }
+      });
+    });
+
+    draw();
+    drawTimeOff();
+    summarise();
+  },
+});
+
 /* ── history ── */
 route('/doctor/history', {
   template: 'view-doctor-history',
@@ -1925,15 +2218,22 @@ route('/admin', {
   roles: ADMIN,
   async render(ctx) {
     fill('stats', skeleton(1));
-    const [stats, pending, reports] = await Promise.all([
+    const [stats, pending, reports, patients] = await Promise.all([
       apiGet('/api/admin/stats'), apiGet('/api/admin/doctors?status=pending&limit=5'), apiGet('/api/admin/reports?state=open&limit=5'),
+      apiGet('/api/admin/patients?status=pending&limit=5'),
     ]);
     if (!ctx.isCurrent()) return;
     fill('stats',
+      statTile('Pending patients', stats.pending_patients, 'identity checks', '/admin/patients'),
       statTile('Pending licenses', stats.pending_licenses, 'awaiting review', '/admin/verification'),
       statTile('Verified doctors', stats.verified_doctors, 'can use clinical features', '/admin/doctors?status=verified'),
-      statTile('Suspended', stats.suspended_doctors, 'doctors', '/admin/doctors?status=suspended'),
       statTile('Open reports', stats.open_reports, 'from patients', '/admin/reports'));
+    fill('patient-queue', patients.items.length
+      ? patients.items.map((p) => h('div', { class: 'list-item' },
+        h('div', { class: 'meta' }, h('strong', { text: p.full_name }),
+          h('span', { class: 'small', text: p.id_document_file_id ? `ID uploaded ${fmtDate(p.submitted_at)}` : 'No ID uploaded yet' })),
+        linkTo(`/admin/patients/${p.user_id}`, 'Review', p.id_document_file_id ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm')))
+      : emptyState('Queue is empty', 'No patient is waiting for an identity check.'));
     fill('queue', pending.items.length
       ? pending.items.map((d) => h('div', { class: 'list-item' },
         h('div', { class: 'meta' }, h('strong', { text: d.full_name }), h('span', { class: 'small', text: `${d.council} · submitted ${fmtDate(d.submitted_at)}` })),
@@ -1972,15 +2272,22 @@ route('/admin/verification', {
 });
 
 /** Run an admin decision: confirm (with a reason when required), call the API, then reload. */
-async function adminDecision({ doctorId, action, title, message, confirmLabel, danger, needsReason, done }) {
+const PATIENT_DECISIONS = {
+  approve: (id) => `/api/admin/patients/${enc(id)}/approve`,
+  reject: (id) => `/api/admin/patients/${enc(id)}/reject`,
+};
+
+async function adminDecision({ doctorId, patientId, action, title, message, confirmLabel, danger, needsReason, done }) {
   let succeeded = false;
+  const who = patientId ? 'patient' : 'doctor';
+  const path = patientId ? PATIENT_DECISIONS[action](patientId) : `/api/admin/doctors/${enc(doctorId)}/${action}`;
   await dialog({
     title, message, confirmLabel, danger,
     fields: needsReason ? [{ name: 'reason', label: 'Reason', type: 'textarea', required: true, minLength: 10, rows: 4, maxLength: 1000,
-      help: 'At least 10 characters. The doctor can see this reason.' }] : [],
+      help: `At least 10 characters. The ${who} can see this reason.` }] : [],
     perform: async (values) => {
       try {
-        await apiPost(`/api/admin/doctors/${enc(doctorId)}/${action}`, needsReason ? { reason: values.reason } : null);
+        await apiPost(path, needsReason ? { reason: values.reason } : null);
         succeeded = true;
         return null;
       } catch (err) { return err.message; }
@@ -2064,6 +2371,93 @@ route('/admin/verification/:id', {
       h('strong', { text: prettify(e.action) }), e.from_status || e.to_status ? ` (${e.from_status || 'new'} → ${e.to_status || ''})` : '',
       h('div', { class: 'when', text: `${fmtDateTime(e.created_at)}${e.actor_id ? '' : ' · system'}` }),
       e.reason ? h('div', { class: 'small', text: e.reason }) : null)));
+  },
+});
+
+/* ── patient identity review ── */
+route('/admin/patients', {
+  template: 'view-admin-patients',
+  title: 'Patients',
+  roles: ADMIN,
+  render(ctx) {
+    const form = $('#patients-filter');
+    form.elements.status.value = ctx.query.get('status') ?? 'pending';
+    const list = pagedList({
+      target: slot('list'), pager: slot('pager'),
+      load: (limit, offset) => apiGet(`/api/admin/patients?status=${enc(form.elements.status.value)}&q=${enc(form.elements.q.value.trim())}&limit=${limit}&offset=${offset}`),
+      empty: emptyState('No patients match', 'Change the filter to see more.'),
+      render: (items) => renderTable({
+        rows: items,
+        columns: [
+          { label: 'Patient', cell: (p) => h('span', null, h('strong', { text: p.full_name }), h('span', { class: 'sub', text: p.email })) },
+          { label: 'Date of birth', cell: (p) => h('span', null, dash(p.dob), p.gender ? h('span', { class: 'sub', text: p.gender }) : null), class: 'nowrap' },
+          { label: 'Registered', cell: (p) => fmtDate(p.registered_at), class: 'nowrap' },
+          { label: 'ID document', cell: (p) => (p.id_document_file_id ? h('span', null, badge('uploaded', 'ok'), h('span', { class: 'sub', text: fmtDateTime(p.submitted_at) })) : badge('not uploaded', 'pending')) },
+          { label: 'Status', cell: (p) => badge(p.status) },
+          { label: '', cell: (p) => linkTo(`/admin/patients/${p.user_id}`, p.status === 'pending' ? 'Review' : 'Details', p.status === 'pending' && p.id_document_file_id ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm') },
+        ],
+      }),
+    });
+    form.elements.status.addEventListener('change', () => list.reload(0));
+    form.addEventListener('submit', (e) => { e.preventDefault(); list.reload(0); });
+  },
+});
+
+const PATIENT_HISTORY_LABELS = {
+  'patient.id_document.upload': 'ID uploaded',
+  'patient.verification.approve': 'Approved',
+  'patient.verification.reject': 'Rejected',
+};
+
+route('/admin/patients/:id', {
+  template: 'view-admin-patient-detail',
+  title: 'Patient review',
+  roles: ADMIN,
+  async render(ctx) {
+    const p = await apiGet(`/api/admin/patients/${enc(ctx.params.id)}`);
+    if (!ctx.isCurrent()) return;
+    setText('name', p.full_name);
+    append(clear(slot('subtitle')), [`${p.email} · `, badge(p.status)]);
+
+    const banner = slot('banner');
+    const messages = {
+      pending: ['pending', p.id_document_file_id
+        ? 'Waiting for your decision. Compare the ID with the details below before approving.'
+        : 'The patient has not uploaded an ID yet, so they cannot be approved.'],
+      verified: ['verified', `Verified${p.verified_at ? ` on ${fmtDate(p.verified_at)}` : ''}. The patient can book appointments and share records.`],
+      rejected: ['rejected', `Rejected: ${p.rejection_reason || ''} A new ID upload puts the patient back in the queue.`],
+    };
+    banner.className = `banner ${messages[p.status][0]}`;
+    banner.textContent = messages[p.status][1];
+
+    if (p.status === 'pending') {
+      const approve = h('button', { class: 'btn btn-primary', type: 'button', text: 'Approve', on: { click: async () => {
+        if (await adminDecision({ patientId: p.user_id, action: 'approve', title: 'Approve this patient?', confirmLabel: 'Approve',
+          message: `${p.full_name} will be able to book appointments and share records with doctors.`, done: 'Patient approved' })) go('/admin/patients');
+      } } });
+      if (!p.id_document_file_id) { approve.disabled = true; approve.title = 'The patient has not uploaded an ID document yet'; }
+      fill('actions', approve, h('button', { class: 'btn btn-danger', type: 'button', text: 'Reject', on: { click: async () => {
+        if (await adminDecision({ patientId: p.user_id, action: 'reject', title: 'Reject this ID', confirmLabel: 'Reject', danger: true, needsReason: true,
+          message: 'The patient sees your reason and can upload a different ID.', done: 'Patient rejected' })) go('/admin/patients');
+      } } }));
+    } else fill('actions');
+
+    fill('details', ...[
+      ['Name', p.full_name], ['Date of birth', p.dob], ['Gender', p.gender], ['Blood group', p.blood_group], ['Phone', p.phone], ['Email', p.email],
+      ['Registered', fmtDateTime(p.registered_at)], ['ID submitted', p.submitted_at ? fmtDateTime(p.submitted_at) : null],
+    ].flatMap(([label, value]) => [h('dt', { text: label }), h('dd', { text: dash(value) })]));
+
+    fill('document',
+      p.id_document_file_id
+        ? h('div', { class: 'stack' }, h('p', { text: 'The document opens in a new tab through a permission-checked, audit-logged link.' }), fileLink(p.id_document_file_id, 'Open ID document', 'btn btn-secondary'))
+        : emptyState('No ID uploaded', 'The patient has not uploaded an ID document yet.'),
+      p.profile_photo_url ? h('div', { class: 'profile-row mt' }, avatar(p.full_name, p.profile_photo_url, 'lg'), h('span', { class: 'small', text: 'Profile photo' })) : null);
+
+    fill('history', ...(p.history.length
+      ? p.history.map((e) => h('li', null, h('strong', { text: PATIENT_HISTORY_LABELS[e.action] || prettify(e.action) }),
+        h('div', { class: 'when', text: `${fmtDateTime(e.created_at)}${e.by_admin ? ' · administrator' : ' · patient'}` }),
+        e.reason ? h('div', { class: 'small', text: e.reason }) : null))
+      : [h('li', null, h('span', { class: 'small', text: 'Registered; nothing submitted yet.' }))]));
   },
 });
 

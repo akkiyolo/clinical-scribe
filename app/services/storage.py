@@ -112,6 +112,12 @@ UPLOAD_RULES: dict[str, dict[str, tuple[str, frozenset[str]]]] = {
         ".jpeg": ("jpeg", frozenset({"image/jpeg"})),
         ".png": ("png", frozenset({"image/png"})),
     },
+    "patient_id_document": {
+        ".pdf": ("pdf", frozenset({"application/pdf"})),
+        ".jpg": ("jpeg", frozenset({"image/jpeg"})),
+        ".jpeg": ("jpeg", frozenset({"image/jpeg"})),
+        ".png": ("png", frozenset({"image/png"})),
+    },
     "consult_audio": {
         ".mp3": ("mp3", frozenset({"audio/mpeg", "audio/mp3"})),
         ".wav": ("wav", frozenset({"audio/wav", "audio/x-wav", "audio/wave"})),
@@ -126,6 +132,7 @@ UPLOAD_RULES: dict[str, dict[str, tuple[str, frozenset[str]]]] = {
 MAX_BYTES = {
     "profile_photo": 5 * 1024 * 1024,
     "license_certificate": 10 * 1024 * 1024,
+    "patient_id_document": 10 * 1024 * 1024,
     "prescription_docx": 50 * 1024 * 1024,
     "prescription_audio": 50 * 1024 * 1024,
 }

@@ -111,6 +111,7 @@ class AuthResponse(BaseModel):
     full_name: str
     role: str
     doctor_status: str | None = None
+    patient_status: str | None = None
     rejection_reason: str | None = None
     suspension_reason: str | None = None
     profile_photo_url: str | None = None
@@ -123,6 +124,7 @@ class MeResponse(BaseModel):
     role: str
     phone: str | None = None
     doctor_status: str | None = None
+    patient_status: str | None = None
     rejection_reason: str | None = None
     suspension_reason: str | None = None
     profile_photo_url: str | None = None

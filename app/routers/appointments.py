@@ -1,27 +1,40 @@
-"""Appointments router: patients book and cancel, verified doctors confirm and complete."""
+"""Appointments router: verified patients book open slots; doctors complete or cancel.
+
+Booking an open slot confirms the appointment straight away (the doctor published those hours).
+Legacy "requested" appointments can still be confirmed by the doctor.
+"""
 
 from __future__ import annotations
 
+from datetime import timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from app.db import get_db
-from app.deps import get_current_user, require_patient_or_verified_doctor, require_role
+from app.deps import get_current_user, require_patient_or_verified_doctor, require_verified_patient
 from app.models.appointment import Appointment
 from app.models.doctor import DoctorProfile
 from app.models.enums import AppointmentStatus, DoctorStatus, UserRole
 from app.models.user import User
 from app.schemas.appointment import AppointmentCreate, AppointmentResponse, AppointmentUpdate
 from app.services.audit import audit
+from app.services.scheduling import SlotUnavailable, bookable_slot
+from app.services.timeutil import utcnow
 
 router = APIRouter(prefix="/api/appointments", tags=["appointments"])
 
 S = AppointmentStatus
 # who may move an appointment from one status to another
 PATIENT_TRANSITIONS = {(S.requested, S.cancelled), (S.confirmed, S.cancelled)}
-DOCTOR_TRANSITIONS = {(S.requested, S.confirmed), (S.confirmed, S.completed)}
+DOCTOR_TRANSITIONS = {
+    (S.requested, S.confirmed),
+    (S.confirmed, S.completed),
+    (S.requested, S.cancelled),
+    (S.confirmed, S.cancelled),
+}
 
 
 def _response(
@@ -32,6 +45,7 @@ def _response(
         patient_id=appt.patient_id,
         doctor_id=appt.doctor_id,
         scheduled_at=appt.scheduled_at,
+        duration_minutes=appt.duration_minutes,
         status=appt.status.value,
         reason_for_visit=appt.reason_for_visit,
         created_at=appt.created_at,
@@ -51,23 +65,32 @@ def create_appointment(
     request: Request,
     body: AppointmentCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(["patient"])),
+    current_user: User = Depends(require_verified_patient),
 ) -> AppointmentResponse:
-    """Book an appointment (patients only, with verified doctors only)."""
+    """Book one of a verified doctor's open slots. The appointment is confirmed immediately."""
     profile = db.get(DoctorProfile, body.doctor_id)
     doctor = db.get(User, body.doctor_id)
     if not profile or not doctor or profile.status != DoctorStatus.verified or not doctor.is_active:
         raise HTTPException(status_code=400, detail="Doctor is not verified or does not exist")
+    try:
+        slot = bookable_slot(db, body.doctor_id, body.scheduled_at)
+    except SlotUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
     appt = Appointment(
         patient_id=current_user.id,
         doctor_id=body.doctor_id,
-        scheduled_at=body.scheduled_at,
+        scheduled_at=slot.start,
+        duration_minutes=slot.minutes,
         reason_for_visit=body.reason_for_visit,
-        status=AppointmentStatus.requested,
+        status=AppointmentStatus.confirmed,
     )
-    db.add(appt)
-    db.flush()
+    try:
+        db.add(appt)
+        db.flush()
+    except IntegrityError:  # someone else took the slot between the check and the insert
+        db.rollback()
+        raise HTTPException(status_code=409, detail="That slot has just been booked. Pick another.")
     audit(
         db,
         current_user,
@@ -75,7 +98,7 @@ def create_appointment(
         "appointment",
         str(appt.id),
         request,
-        {"doctor_id": str(body.doctor_id)},
+        {"doctor_id": str(body.doctor_id), "scheduled_at": slot.start.isoformat()},
     )
     db.commit()
     db.refresh(appt)
@@ -85,6 +108,7 @@ def create_appointment(
 @router.get("")
 def list_appointments(
     status: str = "",
+    when: str = Query("", pattern="^(|upcoming|past)$"),
     limit: int = 20,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -110,8 +134,18 @@ def list_appointments(
         except ValueError:
             raise HTTPException(status_code=400, detail="Unknown appointment status")
 
+    # "upcoming" keeps the last hour so an appointment in progress stays on the list.
+    cutoff = utcnow() - timedelta(hours=1)
+    if when == "upcoming":
+        query = query.filter(Appointment.scheduled_at >= cutoff)
+        order = Appointment.scheduled_at.asc()
+    else:
+        if when == "past":
+            query = query.filter(Appointment.scheduled_at < cutoff)
+        order = Appointment.scheduled_at.desc()
+
     total = query.count()
-    rows = query.order_by(Appointment.scheduled_at.desc()).offset(offset).limit(limit).all()
+    rows = query.order_by(order).offset(offset).limit(limit).all()
     return {
         "items": [_response(a, p, d) for a, p, d in rows],
         "total": total,
@@ -128,7 +162,7 @@ def update_appointment(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_patient_or_verified_doctor),
 ) -> dict:
-    """Patient: cancel own. Verified doctor: confirm or complete own. Invalid moves return 409."""
+    """Patient: cancel own. Verified doctor: confirm, complete or cancel own. Invalid moves: 409."""
     appt = db.query(Appointment).filter(Appointment.id == appointment_id).with_for_update().first()
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
@@ -144,9 +178,9 @@ def update_appointment(
         if appt.doctor_id != current_user.id:
             raise HTTPException(status_code=403, detail="Not your appointment")
         allowed = DOCTOR_TRANSITIONS
-        if target not in (S.confirmed, S.completed):
+        if target not in (S.confirmed, S.completed, S.cancelled):
             raise HTTPException(
-                status_code=400, detail="Doctors can only confirm or complete appointments"
+                status_code=400, detail="Doctors can only confirm, complete or cancel appointments"
             )
 
     if (appt.status, target) not in allowed:

@@ -11,9 +11,12 @@ from app.models.report import AuditLog
 from tests.conftest import (
     PDF_BYTES,
     Api,
+    book_slot,
     grant_consent,
     new_doctor,
     new_patient,
+    open_slots,
+    publish_hours,
     run_to_prescription,
     verified_doctor,
 )
@@ -23,35 +26,29 @@ def tomorrow() -> str:
     return (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
 
 
-def book(patient: Api, doctor: Api) -> str:
-    response = patient.post(
-        "/api/appointments",
-        {"doctor_id": doctor.id, "scheduled_at": tomorrow(), "reason_for_visit": "Checkup"},
-    )
-    assert response.status_code == 201, response.text
-    return response.json()["id"]
+def book(patient: Api, doctor: Api, index: int = 0) -> str:
+    return book_slot(patient, doctor, index)["id"]
 
 
 class TestAppointments:
-    def test_patient_books_with_verified_doctor_only(self, admin, doctor):
+    def test_patient_books_an_open_slot_and_it_is_confirmed(self, admin, doctor):
+        publish_hours(doctor)
         patient = new_patient()
-        assert (
-            patient.post(
-                "/api/appointments", {"doctor_id": new_doctor().id, "scheduled_at": tomorrow()}
-            ).status_code
-            == 400
-        )
-        assert (
-            patient.post(
-                "/api/appointments", {"doctor_id": str(uuid.uuid4()), "scheduled_at": tomorrow()}
-            ).status_code
-            == 400
-        )
+        slot = open_slots(patient, doctor)[0]
         appointment = patient.post(
             "/api/appointments",
-            {"doctor_id": doctor.id, "scheduled_at": tomorrow(), "reason_for_visit": "Cough"},
+            {"doctor_id": doctor.id, "scheduled_at": slot["start"], "reason_for_visit": "Cough"},
         ).json()
-        assert appointment["status"] == "requested" and appointment["reason_for_visit"] == "Cough"
+        assert appointment["status"] == "confirmed" and appointment["reason_for_visit"] == "Cough"
+        assert appointment["duration_minutes"] == 30
+
+    def test_only_verified_doctors_can_be_booked(self, doctor):
+        patient = new_patient()
+        for doctor_id in (new_doctor().id, str(uuid.uuid4())):
+            response = patient.post(
+                "/api/appointments", {"doctor_id": doctor_id, "scheduled_at": tomorrow()}
+            )
+            assert response.status_code == 400
 
     def test_past_appointment_times_are_rejected(self, doctor):
         past = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
@@ -88,10 +85,10 @@ class TestAppointments:
         )
         other_doctor = verified_doctor(admin)
         assert (
-            other_doctor.patch(f"/api/appointments/{a_id}", {"status": "confirmed"}).status_code
+            other_doctor.patch(f"/api/appointments/{a_id}", {"status": "completed"}).status_code
             == 403
         )
-        assert admin.patch(f"/api/appointments/{a_id}", {"status": "confirmed"}).status_code == 403
+        assert admin.patch(f"/api/appointments/{a_id}", {"status": "completed"}).status_code == 403
         assert (
             alice.patch(f"/api/appointments/{uuid.uuid4()}", {"status": "cancelled"}).status_code
             == 404
@@ -99,34 +96,41 @@ class TestAppointments:
 
     def test_status_transitions_follow_the_rules(self, doctor):
         patient = new_patient()
-        a_id = book(patient, doctor)
+        a_id = book(patient, doctor)  # confirmed on booking
         assert (
-            patient.patch(f"/api/appointments/{a_id}", {"status": "confirmed"}).status_code == 400
+            patient.patch(f"/api/appointments/{a_id}", {"status": "completed"}).status_code == 400
         )
-        assert (
-            doctor.patch(f"/api/appointments/{a_id}", {"status": "completed"}).status_code == 409
-        )  # not confirmed yet
-        assert doctor.patch(f"/api/appointments/{a_id}", {"status": "cancelled"}).status_code == 400
-        assert doctor.patch(f"/api/appointments/{a_id}", {"status": "confirmed"}).status_code == 200
         assert doctor.patch(f"/api/appointments/{a_id}", {"status": "confirmed"}).status_code == 409
         assert doctor.patch(f"/api/appointments/{a_id}", {"status": "completed"}).status_code == 200
         assert (
             patient.patch(f"/api/appointments/{a_id}", {"status": "cancelled"}).status_code == 409
         )
+        assert doctor.patch(f"/api/appointments/{a_id}", {"status": "cancelled"}).status_code == 409
         assert patient.patch(f"/api/appointments/{a_id}", {"status": "bogus"}).status_code == 422
 
-    def test_patient_can_cancel_an_open_appointment(self, doctor):
+    def test_patient_and_doctor_can_cancel_and_the_slot_reopens(self, doctor):
         patient = new_patient()
-        a_id = book(patient, doctor)
+        first = book_slot(patient, doctor)
+        assert first["scheduled_at"] not in [s["start"] for s in open_slots(patient, doctor)]
         assert (
-            patient.patch(f"/api/appointments/{a_id}", {"status": "cancelled"}).status_code == 200
+            patient.patch(f"/api/appointments/{first['id']}", {"status": "cancelled"}).status_code
+            == 200
         )
-        assert doctor.patch(f"/api/appointments/{a_id}", {"status": "confirmed"}).status_code == 409
+        assert (
+            doctor.patch(f"/api/appointments/{first['id']}", {"status": "completed"}).status_code
+            == 409
+        )
+        again = book_slot(patient, doctor)  # the same slot is open again
+        assert again["scheduled_at"] == first["scheduled_at"]
+        assert (
+            doctor.patch(f"/api/appointments/{again['id']}", {"status": "cancelled"}).status_code
+            == 200
+        )
 
     def test_pagination_limits_are_clamped(self, doctor):
         patient = new_patient()
-        for _ in range(3):
-            book(patient, doctor)
+        for index in range(3):
+            book(patient, doctor, index)
         body = patient.get("/api/appointments?limit=2&offset=1").json()
         assert (
             body["limit"] == 2

@@ -46,7 +46,8 @@ from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from app.db import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models.enums import UserRole  # noqa: E402
+from app.models.enums import PatientStatus, UserRole  # noqa: E402
+from app.models.patient import PatientProfile  # noqa: E402
 from app.models.registry import RegistryRecord  # noqa: E402
 from app.models.user import User  # noqa: E402
 from app.rate_limit import limiter, login_email_limiter  # noqa: E402
@@ -168,7 +169,11 @@ def unique_email(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:10]}@example.com"
 
 
-def new_patient(allergies: str | None = None, name: str = "Test Patient") -> Api:
+def new_patient(
+    allergies: str | None = None, name: str = "Test Patient", verified: bool = True
+) -> Api:
+    """Register a patient. By default the identity review is skipped (marked verified in the
+    database) so tests can book and grant consent; pass verified=False for the real flow."""
     api = Api()
     email = unique_email("patient")
     body = {
@@ -184,7 +189,47 @@ def new_patient(allergies: str | None = None, name: str = "Test Patient") -> Api
     response = api.post("/api/auth/register", body)
     assert response.status_code == 201, response.text
     api.email, api.user = email, response.json()
+    if verified:
+        mark_patient_verified(api.id)
     return api
+
+
+def mark_patient_verified(patient_id: str) -> None:
+    with SessionLocal() as db:
+        profile = db.get(PatientProfile, uuid.UUID(patient_id))
+        profile.status = PatientStatus.verified
+        db.commit()
+
+
+# Every day 08:00-20:00 in 30-minute slots: lets tests book without caring about the weekday.
+ALL_WEEK_HOURS = [
+    {"weekday": d, "start_time": "08:00", "end_time": "20:00", "slot_minutes": 30} for d in range(7)
+]
+
+
+def publish_hours(doctor: Api, rules: list[dict] | None = None) -> None:
+    response = doctor.put("/api/doctor/availability", {"rules": rules or ALL_WEEK_HOURS})
+    assert response.status_code == 200, response.text
+
+
+def open_slots(viewer: Api, doctor: Api, days: int = 14) -> list[dict]:
+    response = viewer.get(f"/api/doctors/{doctor.id}/slots?days={days}")
+    assert response.status_code == 200, response.text
+    return [slot for day in response.json()["days"] for slot in day["slots"]]
+
+
+def book_slot(patient: Api, doctor: Api, index: int = 0, reason: str = "Checkup") -> dict:
+    """Book the doctor's index-th open slot (publishing all-week hours first if needed)."""
+    slots = open_slots(patient, doctor)
+    if not slots:
+        publish_hours(doctor)
+        slots = open_slots(patient, doctor)
+    response = patient.post(
+        "/api/appointments",
+        {"doctor_id": doctor.id, "scheduled_at": slots[index]["start"], "reason_for_visit": reason},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
 
 
 def new_doctor(

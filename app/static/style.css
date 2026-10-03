@@ -460,3 +460,18 @@ textarea.transcript-edit { width: 100%; min-height: 280px; font-family: var(--fo
   .search-row .btn { width: 100%; }
 }
 .mono.raw { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--ink-2); }
+
+/* Appointment slots and weekly hours */
+.slot-picker { display: flex; flex-direction: column; gap: 14px; max-height: 340px; overflow-y: auto; padding-right: 4px; }
+.slot-day-title { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; margin-bottom: 8px; }
+.slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 6px; }
+.slot { padding: 8px 6px; border-radius: var(--r-sm); border: 1px solid var(--line-3); background: var(--paper); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.slot:hover { background: var(--paper-2); }
+.slot[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.schedule { display: flex; flex-direction: column; gap: 8px; }
+.schedule-row { display: grid; grid-template-columns: minmax(120px, 1.3fr) minmax(96px, 1fr) auto minmax(96px, 1fr) minmax(120px, 1.2fr) auto; gap: 8px; align-items: center; }
+.schedule-row .input { padding: 8px 10px; }
+@media (max-width: 640px) {
+  .schedule-row { grid-template-columns: 1fr 1fr; }
+  .schedule-row > .small { display: none; }
+}

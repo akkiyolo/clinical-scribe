@@ -65,7 +65,7 @@ def _authorize(db: Session, user: User, record: File) -> None:
                 return
         raise DENIED
 
-    if category == FileCategory.license_certificate:
+    if category in (FileCategory.license_certificate, FileCategory.patient_id_document):
         if user.id == owner or user.role == UserRole.admin:
             return
         raise DENIED

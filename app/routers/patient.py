@@ -1,17 +1,18 @@
 """Profile router: view and edit the signed-in user's profile, upload a profile photo."""
 
-from fastapi import APIRouter, Depends, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi import File as FastAPIFile
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.deps import get_current_user
-from app.models.enums import FileCategory, UserRole
+from app.deps import get_current_user, require_role
+from app.models.enums import FileCategory, PatientStatus, UserRole
 from app.models.patient import PatientProfile
 from app.models.user import User
 from app.rate_limit import limiter
 from app.schemas.patient import PatientProfileResponse, PatientProfileUpdate
 from app.services.audit import audit
+from app.services.timeutil import utcnow
 from app.services.uploads import read_validated_upload, store_upload
 
 router = APIRouter(prefix="/api", tags=["profile"])
@@ -104,3 +105,73 @@ def upload_photo(
     audit(db, current_user, "profile.photo.upload", "file", str(record.id), request)
     db.commit()
     return {"detail": "Photo uploaded", "file_id": str(record.id)}
+
+
+# ── Identity verification ─────────────────────────────────────────────────────────────
+
+
+def _patient_profile(db: Session, user: User) -> PatientProfile:
+    profile = db.get(PatientProfile, user.id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Patient profile not found")
+    return profile
+
+
+def patient_verification_state(profile: PatientProfile) -> dict:
+    return {
+        "status": profile.status.value,
+        "id_document_file_id": (
+            str(profile.id_document_file_id) if profile.id_document_file_id else None
+        ),
+        "submitted_at": profile.submitted_at.isoformat() if profile.submitted_at else None,
+        "verified_at": profile.verified_at.isoformat() if profile.verified_at else None,
+        "rejection_reason": profile.rejection_reason,
+    }
+
+
+@router.get("/patient/verification")
+def get_patient_verification(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["patient"])),
+) -> dict:
+    """The patient's own identity-verification status."""
+    return patient_verification_state(_patient_profile(db, current_user))
+
+
+@router.post("/patient/id-document")
+@limiter.limit("20/minute")
+def upload_id_document(
+    request: Request,
+    file: UploadFile = FastAPIFile(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["patient"])),
+) -> dict:
+    """Upload a government ID (pdf/jpg/png, max 10 MB) for an administrator to check.
+
+    After a rejection, a new upload resubmits the patient for review. Verified patients cannot
+    replace their document (that would silently re-open a closed review).
+    """
+    profile = _patient_profile(db, current_user)
+    if profile.status == PatientStatus.verified:
+        raise HTTPException(status_code=409, detail="Your identity is already verified")
+    upload = read_validated_upload(file, "patient_id_document")
+    record = store_upload(db, current_user.id, "patient", FileCategory.patient_id_document, upload)
+    resubmitted = profile.status == PatientStatus.rejected
+    profile.id_document_file_id = record.id
+    profile.submitted_at = utcnow()
+    profile.status = PatientStatus.pending
+    profile.rejection_reason = None
+    audit(
+        db,
+        current_user,
+        "patient.id_document.upload",
+        "patient_profile",
+        str(current_user.id),
+        request,
+        {"file_id": str(record.id), "resubmitted": resubmitted},
+    )
+    db.commit()
+    return {
+        "detail": "ID uploaded. An administrator will review it.",
+        **patient_verification_state(profile),
+    }

@@ -36,6 +36,7 @@ class AppointmentResponse(BaseModel):
     patient_id: UUID
     doctor_id: UUID
     scheduled_at: datetime
+    duration_minutes: int | None = None
     status: str
     reason_for_visit: str | None = None
     created_at: datetime

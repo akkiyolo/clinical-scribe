@@ -172,6 +172,7 @@ class TestEnvExample:
             "LLM_PROVIDER",
             "LLM_BASE_URL",
             "LOCAL_STORAGE_DIR",
+            "CLINIC_TIMEZONE",
         }
         assert all(key in Settings.model_fields for key in self.keys())
 

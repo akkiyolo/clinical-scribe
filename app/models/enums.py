@@ -18,9 +18,16 @@ class DoctorStatus(str, enum.Enum):
     suspended = "suspended"
 
 
+class PatientStatus(str, enum.Enum):
+    pending = "pending"
+    verified = "verified"
+    rejected = "rejected"
+
+
 class FileCategory(str, enum.Enum):
     profile_photo = "profile_photo"
     license_certificate = "license_certificate"
+    patient_id_document = "patient_id_document"
     consult_audio = "consult_audio"
     prescription_docx = "prescription_docx"
     prescription_audio = "prescription_audio"

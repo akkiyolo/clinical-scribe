@@ -2,23 +2,32 @@
 
 Run (after `alembic upgrade head`): python -m scripts.seed_demo
 
-Creates a demo patient, a verified demo doctor (with a matching registry record), a pending
-doctor for the admin queue, one confirmed appointment, an active consent, and a consult with a
-sample synthetic transcript ready for SOAP generation. The admin account is created by
+Creates a verified demo patient, a pending patient for the admin's patient queue, a verified
+demo doctor (with a matching registry record and weekly hours Mon-Sat 10:00-13:00 and
+17:00-19:00 in 30-minute slots), a pending doctor for the license queue, one confirmed
+appointment, an active consent, and a consult with a sample synthetic transcript ready for
+SOAP generation. The admin account is created by
 `python -m scripts.create_admin`. All names, numbers and passwords below are fake.
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models.appointment import Appointment
+from app.models.availability import DoctorAvailability
 from app.models.consent import Consent
 from app.models.consult import Consult
 from app.models.doctor import DoctorProfile
-from app.models.enums import AppointmentStatus, DoctorStatus, TranscriptionStatus, UserRole
+from app.models.enums import (
+    AppointmentStatus,
+    DoctorStatus,
+    PatientStatus,
+    TranscriptionStatus,
+    UserRole,
+)
 from app.models.patient import PatientProfile
 from app.models.user import User
 from app.security import hash_password
@@ -30,6 +39,8 @@ DEMO_PASSWORD = "DemoPass123"  # synthetic accounts only
 DOCTOR_EMAIL = "dr.demo@example.com"
 PENDING_DOCTOR_EMAIL = "dr.pending@example.com"
 PATIENT_EMAIL = "patient.demo@example.com"
+PENDING_PATIENT_EMAIL = "patient.pending@example.com"
+DEMO_HOURS = ((time(10, 0), time(13, 0)), (time(17, 0), time(19, 0)))  # Mon-Sat
 
 
 def _doctor(db, email, name, reg_number, council, year, specialization, verified):
@@ -109,8 +120,31 @@ def seed_demo() -> None:
                 gender="male",
                 blood_group="B+",
                 allergies="Penicillin",
+                status=PatientStatus.verified,  # demo seed only; real patients need an admin
+                verified_at=datetime.now(timezone.utc),
             )
         )
+        pending_patient = User(
+            email=PENDING_PATIENT_EMAIL,
+            password_hash=hash_password(DEMO_PASSWORD),
+            role=UserRole.patient,
+            full_name="Meena Iyer",
+            phone="+91-9000000003",
+        )
+        db.add(pending_patient)
+        db.flush()
+        db.add(PatientProfile(user_id=pending_patient.id, dob=date(1988, 2, 20), gender="female"))
+        for weekday in range(6):
+            for start, end in DEMO_HOURS:
+                db.add(
+                    DoctorAvailability(
+                        doctor_id=doctor.id,
+                        weekday=weekday,
+                        start_time=start,
+                        end_time=end,
+                        slot_minutes=30,
+                    )
+                )
         appointment = Appointment(
             patient_id=patient.id,
             doctor_id=doctor.id,
@@ -137,9 +171,14 @@ def seed_demo() -> None:
     print(
         f"  Pending doctor  : {PENDING_DOCTOR_EMAIL} / {DEMO_PASSWORD}  (approve in the admin queue)"
     )
-    print(f"  Patient         : {PATIENT_EMAIL} / {DEMO_PASSWORD}")
+    print(f"  Patient         : {PATIENT_EMAIL} / {DEMO_PASSWORD}  (verified)")
+    print(
+        f"  Pending patient : {PENDING_PATIENT_EMAIL} / {DEMO_PASSWORD}"
+        "  (upload an ID, then approve it in the admin patient queue)"
+    )
     print(
         "  The patient has granted consent to the verified doctor; one consult is ready for SOAP."
+        "\n  The verified doctor has weekly hours, so patients can book open slots."
     )
 
 

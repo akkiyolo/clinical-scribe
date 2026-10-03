@@ -10,9 +10,9 @@ ClinicalScribe is a web platform where **verified doctors** record or upload a c
 
 | Role | What they do |
 |---|---|
-| **Patient** | Registers, finds verified doctors, books appointments, grants and revokes consent, downloads approved prescriptions (and can listen to a summary when voice is enabled), reports a doctor |
-| **Doctor** | Registers with license details, uploads a license certificate, waits for admin approval; once **verified** runs consults (record / upload / paste), reviews the SOAP note, reviews and approves the AI-drafted prescription |
-| **Admin** | Reviews license submissions (with registry evidence), approves / rejects / suspends / reinstates doctors, reads patient reports, browses the audit log |
+| **Patient** | Registers, uploads a government ID and waits for admin approval; once **verified** finds doctors, books one of their open slots, grants and revokes consent, downloads approved prescriptions (and can listen to a summary when voice is enabled), reports a doctor |
+| **Doctor** | Registers with license details, uploads a license certificate, waits for admin approval; once **verified** publishes weekly hours and time off, manages booked appointments, runs consults (record / upload / paste), reviews the SOAP note, reviews and approves the AI-drafted prescription |
+| **Admin** | Reviews patient IDs and approves / rejects patients; reviews license submissions (with registry evidence), approves / rejects / suspends / reinstates doctors, reads patient reports, browses the audit log |
 
 Authentication is deliberately simple: **email + password stored in PostgreSQL**. Doctors have **one extra gate**: a medical-license check that an admin must approve before any clinical feature works (enforced in the backend on every request).
 
@@ -86,7 +86,7 @@ python -m scripts.seed_demo             # optional: synthetic doctors, patient, 
 uvicorn app.main:app --reload           # http://127.0.0.1:8000  (API docs at /docs in development)
 ```
 
-Demo accounts created by `seed_demo` (all synthetic, password `DemoPass123`): `dr.demo@example.com` (verified doctor), `dr.pending@example.com` (waiting in the admin queue), `patient.demo@example.com` (has consented to the demo doctor).
+Demo accounts created by `seed_demo` (all synthetic, password `DemoPass123`): `dr.demo@example.com` (verified doctor with weekly hours Mon–Sat 10:00–13:00 and 17:00–19:00), `dr.pending@example.com` (waiting in the license queue), `patient.demo@example.com` (verified, has consented to the demo doctor), `patient.pending@example.com` (not verified yet: upload an ID, then approve it as admin). The admin account is whatever `ADMIN_BOOTSTRAP_EMAIL` / `_PASSWORD` say; there is no demo admin. Demo data only exists in the database `seed_demo` ran against, and the script refuses to run with `ENV=production`.
 
 ## Environment variables
 
@@ -95,6 +95,7 @@ Demo accounts created by `seed_demo` (all synthetic, password `DemoPass123`): `d
 | `ENV` | `development` or `production`. Production turns on `Secure` cookies, HSTS, strict startup validation and hides `/docs` |
 | `SECRET_KEY` | Signs JWTs and CSRF tokens. Production needs 32+ random characters |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Session lifetime (default 60) |
+| `CLINIC_TIMEZONE` | IANA time zone of doctors' weekly hours and appointment slots (default `Asia/Kolkata`) |
 | `DATABASE_URL` | `postgresql+psycopg://…?sslmode=require` (a `postgres://` or `postgresql://` URL is normalised). `sslmode=require` is mandatory for non-local hosts in production. SQLite is accepted for local runs |
 | `ADMIN_BOOTSTRAP_EMAIL` / `_PASSWORD` | Used once by `scripts/create_admin.py`; weak passwords are refused |
 | `STORAGE_BACKEND` | `local` (development only) or `s3` (required in production) |
@@ -185,20 +186,24 @@ Use `LLM_PROVIDER=mock STT_PROVIDER=mock` for a no-keys demo (the mock transcrip
 
 1. **Register a doctor** (`#/register`, choose *Doctor*). Run `python -m scripts.seed_registry` first, then use a seeded registry entry to see a perfect evidence match, e.g. registration `TN-2010-22001`, council `Tamil Nadu Medical Council`, name `Dr. Lakshmi Narayanan` (each registration number can belong to only one non-rejected doctor, so `seed_demo`'s own doctor already holds `MH-2015-12345`). You land on *Verify your license*.
 2. **Upload the license** certificate (PDF/JPG/PNG). The doctor still cannot use any clinical feature.
-3. **Admin approves.** Sign in as the admin → *Verification*. The queue shows the registry evidence (match, name score, duplicate flag). Open the doctor, view the certificate, **Approve** (or Reject with a reason of 10+ characters).
-4. **Patient registers**, opens *Doctors*, books an appointment (the dialog can grant consent at the same time) and, if needed, grants consent under *Consents*.
-5. **Doctor starts a consult** from the dashboard or *New consult*, then records in the browser, uploads audio, or pastes a transcript.
-6. **Transcript → SOAP.** Review the transcript, press *Generate SOAP note*, edit the SOAP fields and ICD-10 chips, press *Approve SOAP and draft prescription*.
-7. **The agent drafts the prescription** (progress is shown; it finishes in seconds with the mock) and marks the consult *ready for review*.
-8. **Doctor reviews** the draft: edit medications, read the safety flags next to the highlighted source quotes, tick *I have reviewed the high-risk flags* if there are any, and **Approve**. Saving edits creates a new version; an approved prescription is never edited in place.
-9. **Patient downloads** the approved `.docx` from *Prescriptions* (and, with voice on, presses *Listen to summary*). Before approval the patient sees nothing.
-10. **Admin** opens *Audit log* to see sign-ins, verification decisions, file access and approvals.
+3. **Admin approves.** Sign in as the admin → *Licenses*. The queue shows the registry evidence (match, name score, duplicate flag). Open the doctor, view the certificate, **Approve** (or Reject with a reason of 10+ characters).
+4. **Patient registers and uploads an ID** (*Verify identity*). The admin opens *Patients*, checks the ID against the details and approves (or rejects with a reason; a new upload resubmits).
+5. **Doctor publishes hours** under *Availability* (weekly windows split into 10–60 minute slots, plus whole days of time off).
+6. **Patient books a slot**: *Doctors* → *Book appointment* shows the open slots for the next two weeks; picking one confirms the appointment immediately (the dialog can grant consent at the same time). Either side can cancel, which reopens the slot; the doctor sees bookings under *Appointments*.
+7. **Doctor starts a consult** from the dashboard or *New consult*, then records in the browser, uploads audio, or pastes a transcript.
+8. **Transcript → SOAP.** Review the transcript, press *Generate SOAP note*, edit the SOAP fields and ICD-10 chips, press *Approve SOAP and draft prescription*.
+9. **The agent drafts the prescription** (progress is shown; it finishes in seconds with the mock) and marks the consult *ready for review*.
+10. **Doctor reviews** the draft: edit medications, read the safety flags next to the highlighted source quotes, tick *I have reviewed the high-risk flags* if there are any, and **Approve**. Saving edits creates a new version; an approved prescription is never edited in place.
+11. **Patient downloads** the approved `.docx` from *Prescriptions* (and, with voice on, presses *Listen to summary*). Before approval the patient sees nothing.
+12. **Admin** opens *Audit log* to see sign-ins, verification decisions, file access and approvals.
 
 ## Security notes
 
 - Passwords: argon2id; login always performs a hash verification; wrong email and wrong password give the identical response. Login is limited to 5/minute per IP **and** per email; registration to 5/hour per IP.
 - Sessions: signed JWT in an `HttpOnly`, `SameSite=Lax` (`Secure` in production) cookie. The user, role and doctor status are **re-read from the database on every request**, so suspending a doctor takes effect on their next click.
 - CSRF: signed double-submit token on every state-changing request; only login and registration are exempt (no session exists yet; both are rate limited).
+- Patients must be approved by an admin (from an uploaded ID that only they and admins can open) before they can book or grant consent; the check is re-read from the database on every request, like the doctor check.
+- Appointments can only be booked into a doctor's published open slots; a partial unique index guarantees one open appointment per doctor and slot even under concurrent bookings.
 - Permissions are enforced in the backend. Every `{id}` route checks ownership or consent; patient and admin views of consults and prescriptions are metadata-only (admins may open a consult only through a report, and that is audit-logged with the report id).
 - Uploads: size, extension, declared MIME type **and** magic bytes must agree; random S3 keys; bounded reads; request-body size limit (413).
 - Headers: the spec CSP (`script-src 'self'`, `style-src 'self'`, no inline script/style, no external resources), `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy: microphone=(self)`, HSTS in production. CORS is off.
@@ -223,4 +228,4 @@ Real ABDM HPR integration for license checks; email verification, password reset
 
 ## Future work
 
-Appointment slots and calendar sync, e-signature of approved prescriptions, pharmacy hand-off, multilingual SOAP/prescription output, automated browser tests, and an admin analytics view.
+Calendar sync and appointment reminders, rescheduling, e-signature of approved prescriptions, pharmacy hand-off, multilingual SOAP/prescription output, automated browser tests, and an admin analytics view.

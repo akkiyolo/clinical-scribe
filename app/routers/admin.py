@@ -18,7 +18,8 @@ from app.db import get_db
 from app.deps import require_role
 from app.models.consult import Consult, Prescription, SOAPNote
 from app.models.doctor import DoctorProfile
-from app.models.enums import DoctorStatus, UserRole
+from app.models.enums import DoctorStatus, PatientStatus, UserRole
+from app.models.patient import PatientProfile
 from app.models.registry import VerificationCheck, VerificationEvent
 from app.models.report import AuditLog, Report
 from app.models.user import User
@@ -32,6 +33,7 @@ from app.schemas.admin import (
 )
 from app.services.audit import audit
 from app.services.prescriptions import doctor_full_response
+from app.services.timeutil import utcnow
 from app.services.verification import InvalidTransition, TransitionError, transition_doctor_status
 
 logger = logging.getLogger(__name__)
@@ -63,6 +65,14 @@ def get_stats(db: Session = Depends(get_db), current_user: User = AdminUser) -> 
             or 0
         )
 
+    def patients(status: PatientStatus) -> int:
+        return (
+            db.query(func.count(PatientProfile.user_id))
+            .filter(PatientProfile.status == status)
+            .scalar()
+            or 0
+        )
+
     return AdminStatsResponse(
         pending_licenses=doctors(DoctorStatus.pending),
         verified_doctors=doctors(DoctorStatus.verified),
@@ -70,6 +80,8 @@ def get_stats(db: Session = Depends(get_db), current_user: User = AdminUser) -> 
         rejected_doctors=doctors(DoctorStatus.rejected),
         open_reports=db.query(func.count(Report.id)).filter(Report.resolved.is_(False)).scalar()
         or 0,
+        pending_patients=patients(PatientStatus.pending),
+        verified_patients=patients(PatientStatus.verified),
         total_patients=db.query(func.count(User.id)).filter(User.role == UserRole.patient).scalar()
         or 0,
         total_consults=db.query(func.count(Consult.id)).scalar() or 0,
@@ -332,6 +344,192 @@ def reinstate_doctor(
         "Doctor reinstated",
         DoctorStatus.suspended,
     )
+
+
+# ── Patients and identity review ──────────────────────────────────────────────────────────
+
+PATIENT_REVIEW_ACTIONS = (
+    "patient.id_document.upload",
+    "patient.verification.approve",
+    "patient.verification.reject",
+)
+
+
+def _patient_item(user: User, profile: PatientProfile) -> dict:
+    return {
+        "user_id": str(user.id),
+        "email": user.email,
+        "full_name": user.full_name,
+        "phone": user.phone,
+        "dob": profile.dob.isoformat() if profile.dob else None,
+        "gender": profile.gender,
+        "status": profile.status.value,
+        "submitted_at": profile.submitted_at.isoformat() if profile.submitted_at else None,
+        "registered_at": user.created_at.isoformat() if user.created_at else None,
+        "id_document_file_id": (
+            str(profile.id_document_file_id) if profile.id_document_file_id else None
+        ),
+    }
+
+
+@router.get("/patients")
+def list_patients(
+    status_filter: str = Query("", alias="status"),
+    q: str = "",
+    limit: int = 20,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    current_user: User = AdminUser,
+) -> dict:
+    """Patients by verification status. In the pending queue, patients who uploaded an ID come
+    first (oldest submission first), then those still to upload one."""
+    limit, offset = _clamp(limit, offset)
+    query = db.query(User, PatientProfile).join(PatientProfile, User.id == PatientProfile.user_id)
+    if status_filter:
+        try:
+            query = query.filter(PatientProfile.status == PatientStatus(status_filter))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Unknown patient status")
+    if q.strip():
+        like = f"%{_like_escape(q.strip())}%"
+        query = query.filter(
+            User.full_name.ilike(like, escape="\\") | User.email.ilike(like, escape="\\")
+        )
+    if status_filter == "pending":
+        query = query.order_by(
+            PatientProfile.id_document_file_id.is_(None),
+            PatientProfile.submitted_at.asc(),
+            User.created_at.asc(),
+        )
+    else:
+        query = query.order_by(User.created_at.desc())
+    total = query.count()
+    rows = query.offset(offset).limit(limit).all()
+    return {
+        "items": [_patient_item(u, p) for u, p in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/patients/{patient_id}")
+def get_patient_detail(
+    patient_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = AdminUser,
+) -> dict:
+    """What the patient submitted, their ID document link and the review history."""
+    user = db.get(User, patient_id)
+    profile = db.get(PatientProfile, patient_id)
+    if not user or not profile:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    history = (
+        db.query(AuditLog)
+        .filter(
+            AuditLog.resource_type == "patient_profile",
+            AuditLog.resource_id == str(patient_id),
+            AuditLog.action.in_(PATIENT_REVIEW_ACTIONS),
+        )
+        .order_by(AuditLog.created_at.asc())
+        .all()
+    )
+    audit(
+        db, current_user, "patient.verification.view", "patient_profile", str(patient_id), request
+    )
+    db.commit()
+    return {
+        **_patient_item(user, profile),
+        "blood_group": profile.blood_group,
+        "verified_at": profile.verified_at.isoformat() if profile.verified_at else None,
+        "rejection_reason": profile.rejection_reason,
+        "profile_photo_url": (
+            f"/api/files/{user.profile_photo_file_id}" if user.profile_photo_file_id else None
+        ),
+        "history": [
+            {
+                "action": row.action,
+                "created_at": row.created_at.isoformat(),
+                "by_admin": row.actor_role == "admin",
+                "reason": (row.metadata_ or {}).get("reason"),
+            }
+            for row in history
+        ],
+    }
+
+
+def _locked_pending_patient(db: Session, patient_id: UUID) -> PatientProfile:
+    profile = (
+        db.query(PatientProfile)
+        .filter(PatientProfile.user_id == patient_id)
+        .with_for_update()
+        .first()
+    )
+    if not profile:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    if profile.status != PatientStatus.pending:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This action needs a pending patient, but this one is {profile.status.value}",
+        )
+    return profile
+
+
+@router.post("/patients/{patient_id}/approve")
+def approve_patient(
+    patient_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = AdminUser,
+) -> dict:
+    """Approve a pending patient whose ID document is on file."""
+    profile = _locked_pending_patient(db, patient_id)
+    if not profile.id_document_file_id:
+        raise HTTPException(
+            status_code=400, detail="The patient has not uploaded an ID document yet"
+        )
+    profile.status = PatientStatus.verified
+    profile.verified_at = utcnow()
+    profile.verified_by = current_user.id
+    profile.rejection_reason = None
+    audit(
+        db,
+        current_user,
+        "patient.verification.approve",
+        "patient_profile",
+        str(patient_id),
+        request,
+    )
+    db.commit()
+    return {"detail": "Patient approved", "status": profile.status.value}
+
+
+@router.post("/patients/{patient_id}/reject")
+def reject_patient(
+    patient_id: UUID,
+    request: Request,
+    body: AdminActionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = AdminUser,
+) -> dict:
+    """Reject a pending patient (reason of at least 10 characters, shown to the patient)."""
+    profile = _locked_pending_patient(db, patient_id)
+    profile.status = PatientStatus.rejected
+    profile.rejection_reason = body.reason
+    profile.verified_at = None
+    profile.verified_by = None
+    audit(
+        db,
+        current_user,
+        "patient.verification.reject",
+        "patient_profile",
+        str(patient_id),
+        request,
+        {"reason": body.reason},
+    )
+    db.commit()
+    return {"detail": "Patient rejected", "status": profile.status.value}
 
 
 # ── Reports ──────────────────────────────────────────────────────────────────────────────────

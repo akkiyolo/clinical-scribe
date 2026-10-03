@@ -36,4 +36,9 @@ class User(Base, TimestampMixin):
     doctor_profile = relationship(
         "DoctorProfile", back_populates="user", uselist=False, foreign_keys="DoctorProfile.user_id"
     )
-    patient_profile = relationship("PatientProfile", back_populates="user", uselist=False)
+    patient_profile = relationship(
+        "PatientProfile",
+        back_populates="user",
+        uselist=False,
+        foreign_keys="PatientProfile.user_id",
+    )

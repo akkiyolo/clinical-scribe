@@ -112,3 +112,23 @@ def require_patient_or_verified_doctor(
             status_code=status.HTTP_403_FORBIDDEN, detail="Your account is not verified yet"
         )
     return current_user
+
+
+def require_verified_patient(
+    db: Session = Depends(get_db),
+    current_user: "User" = Depends(get_current_user),
+) -> "User":
+    """Require a patient whose identity an admin has approved (read from the DB every request)."""
+    from app.models.patient import PatientProfile
+
+    if current_user.role.value != "patient":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Only patients can do this"
+        )
+    profile = db.get(PatientProfile, current_user.id)
+    if not profile or profile.status.value != "verified":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account is not verified yet. Upload your ID for an administrator to approve.",
+        )
+    return current_user

@@ -44,7 +44,15 @@ def set_session_cookie(response: Response, user: User) -> None:
 
 
 def _doctor_state(db: Session, user: User) -> dict:
-    """Doctor verification fields for auth responses (empty for other roles)."""
+    """Verification fields for auth responses: doctor license state or patient identity state."""
+    if user.role == UserRole.patient:
+        patient = db.get(PatientProfile, user.id)
+        if not patient:
+            return {}
+        return {
+            "patient_status": patient.status.value,
+            "rejection_reason": patient.rejection_reason,
+        }
     if user.role != UserRole.doctor:
         return {}
     profile = db.get(DoctorProfile, user.id)

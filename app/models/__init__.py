@@ -1,6 +1,7 @@
 """Models package — imports all models so Alembic and Base.metadata see them."""
 
 from app.models.appointment import Appointment
+from app.models.availability import DoctorAvailability, DoctorTimeOff
 from app.models.base import Base
 from app.models.consent import Consent
 from app.models.consult import AgentRun, Consult, Prescription, SOAPNote
@@ -21,6 +22,8 @@ __all__ = [
     "VerificationCheck",
     "VerificationEvent",
     "Appointment",
+    "DoctorAvailability",
+    "DoctorTimeOff",
     "Consent",
     "Consult",
     "SOAPNote",

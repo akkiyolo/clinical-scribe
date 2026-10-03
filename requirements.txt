@@ -31,6 +31,9 @@ python-docx==1.1.2
 # HTTP client (ElevenLabs and the LLM provider)
 httpx==0.28.1
 
+# Clinic time zone data for appointment slots (slim images ship without it)
+tzdata==2025.2
+
 # Registry name matching
 rapidfuzz==3.11.0
 

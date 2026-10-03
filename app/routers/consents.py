@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from app.db import get_db
-from app.deps import get_current_user, require_role
+from app.deps import get_current_user, require_role, require_verified_patient
 from app.models.consent import Consent
 from app.models.doctor import DoctorProfile
 from app.models.enums import DoctorStatus, UserRole
@@ -76,7 +76,7 @@ def grant_consent(
     request: Request,
     body: ConsentCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(["patient"])),
+    current_user: User = Depends(require_verified_patient),
 ) -> ConsentResponse:
     """Grant a verified doctor access to your records."""
     profile = db.get(DoctorProfile, body.doctor_id)

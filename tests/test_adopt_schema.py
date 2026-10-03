@@ -12,9 +12,12 @@ import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from scripts.adopt_schema import INITIAL_FOREIGN_KEYS, INITIAL_REVISION, adopt
 
 ROOT = Path(__file__).resolve().parents[1]
+HEAD = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini"))).get_current_head()
 PG_URL = os.environ.get("TEST_DATABASE_URL", "")
 ON_POSTGRES = PG_URL.startswith("postgresql")
 
@@ -102,7 +105,7 @@ class TestAdoptOnPostgres:
                 for fk in inspect(conn).get_foreign_keys(table)
             }
         engine.dispose()
-        assert head == "c91d5e2a7f10" and kept == 1
+        assert head == HEAD and kept == 1
         assert {(t, (c,)) for t, c, _ in INITIAL_FOREIGN_KEYS} <= fks
 
     def test_orphaned_rows_are_reported_not_deleted(self, legacy_url):

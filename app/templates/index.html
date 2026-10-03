@@ -231,6 +231,7 @@
                 <div><p class="mono">Patient</p><h1>Hello, <em data-slot="name"></em></h1><p class="sub">Your appointments, prescriptions and who can see your records.</p></div>
                 <a class="btn btn-primary" href="#/patient/doctors">Find a doctor</a>
             </header>
+            <div data-slot="verify-banner"></div>
             <div class="stats" data-slot="stats"></div>
             <div class="bento">
                 <section class="card" aria-labelledby="pd-next">
@@ -327,6 +328,24 @@
         </div>
     </template>
 
+    <template id="view-patient-verification">
+        <div class="page narrow">
+            <header class="page-head"><div><p class="mono">Identity verification</p><h1>Verify your identity</h1><p class="sub">An administrator checks your ID before you can book appointments or share your records with a doctor.</p></div></header>
+            <div class="banner" data-slot="banner" role="status"></div>
+            <section class="card form-card" aria-labelledby="pv-details">
+                <div class="card-head"><h2 id="pv-details">Your details</h2><a class="link-subtle" href="#/patient/profile">Edit profile</a></div>
+                <p class="field-hint">The administrator compares these with your ID, so make sure your name and date of birth match it.</p>
+                <dl class="facts" data-slot="details"></dl>
+            </section>
+            <section class="card form-card" aria-labelledby="pv-id">
+                <div class="card-head"><h2 id="pv-id">Government ID</h2></div>
+                <p class="field-hint">Aadhaar, passport, driving licence or voter ID. PDF, JPG or PNG, up to 10 MB. Only you and administrators can open it.</p>
+                <p data-slot="document-status"></p>
+                <div data-slot="upload"></div>
+                <div data-slot="upload-progress"></div>
+            </section>
+        </div>
+    </template>
     <template id="view-patient-profile">
         <div class="page narrow">
             <header class="page-head"><div><p class="mono">Account</p><h1>Your profile</h1></div></header>
@@ -469,6 +488,42 @@
         </div>
     </template>
 
+    <template id="view-doctor-appointments">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">Appointments</p><h1>Your appointments</h1><p class="sub">Patients book your open slots and the booking is confirmed straight away. Cancel here if you cannot make it.</p></div><a class="btn btn-secondary" href="#/doctor/availability">Set your hours</a></header>
+            <form class="search-row" id="doctor-appointments-filter">
+                <div class="field"><label for="da-when">Show</label><select id="da-when" name="when"><option value="upcoming">Upcoming</option><option value="past">Past</option></select></div>
+            </form>
+            <div data-slot="list"></div>
+            <div data-slot="pager"></div>
+        </div>
+    </template>
+    <template id="view-doctor-availability">
+        <div class="page narrow">
+            <header class="page-head"><div><p class="mono">Availability</p><h1>When you see patients</h1><p class="sub" data-slot="subtitle">Set your weekly hours once. Patients book the open slots; days you mark as time off are hidden.</p></div></header>
+            <div class="banner info" data-slot="summary" role="status"></div>
+            <section class="card form-card" aria-labelledby="av-weekly">
+                <div class="card-head"><h2 id="av-weekly">Weekly hours</h2></div>
+                <p class="field-hint">Each row is a block of time on one weekday, split into slots of the length you choose. Add several rows for split shifts.</p>
+                <div class="schedule" data-slot="rules"></div>
+                <span class="field-error" data-slot="rules-error" role="alert"></span>
+                <div class="row gap wrap mt" data-slot="rule-actions"></div>
+            </section>
+            <section class="card form-card" aria-labelledby="av-off">
+                <div class="card-head"><h2 id="av-off">Time off</h2></div>
+                <p class="field-hint">Whole days with no new bookings, for leave or holidays. Appointments already booked on those days stay until you cancel them.</p>
+                <div data-slot="time-off"></div>
+                <form class="form mt" id="time-off-form" novalidate>
+                    <div class="grid-3">
+                        <div class="field"><label for="to-start">From</label><input id="to-start" name="start_date" type="date" required><span class="field-error" data-error-for="start_date" role="alert"></span></div>
+                        <div class="field"><label for="to-end">To</label><input id="to-end" name="end_date" type="date" required><span class="field-error" data-error-for="end_date" role="alert"></span></div>
+                        <div class="field"><label for="to-reason">Reason <em>optional</em></label><input id="to-reason" name="reason" maxlength="255"></div>
+                    </div>
+                    <div class="row"><button class="btn btn-secondary" type="submit">Add time off</button></div>
+                </form>
+            </section>
+        </div>
+    </template>
     <template id="view-doctor-history">
         <div class="page">
             <header class="page-head"><div><p class="mono">History</p><h1>Consults and prescriptions</h1></div></header>
@@ -504,6 +559,7 @@
             <div class="stats stats-4" data-slot="stats"></div>
             <div class="bento">
                 <section class="card" aria-labelledby="ad-queue"><div class="card-head"><h2 id="ad-queue">Oldest pending licenses</h2><a class="link-subtle" href="#/admin/verification">Open queue</a></div><div data-slot="queue"></div></section>
+                <section class="card" aria-labelledby="ad-patients"><div class="card-head"><h2 id="ad-patients">Patients awaiting review</h2><a class="link-subtle" href="#/admin/patients">Open queue</a></div><div data-slot="patient-queue"></div></section>
                 <section class="card" aria-labelledby="ad-reports"><div class="card-head"><h2 id="ad-reports">Open reports</h2><a class="link-subtle" href="#/admin/reports">All reports</a></div><div data-slot="reports"></div></section>
             </div>
         </div>
@@ -545,6 +601,31 @@
         </div>
     </template>
 
+    <template id="view-admin-patients">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">Identity review</p><h1>Patients</h1><p class="sub">Approve a patient once their ID matches their details. Unverified patients cannot book or share records.</p></div></header>
+            <form class="search-row" id="patients-filter" role="search">
+                <div class="grid-2 search-grid">
+                    <div class="field"><label for="ap-status">Status</label><select id="ap-status" name="status"><option value="pending">Pending</option><option value="verified">Verified</option><option value="rejected">Rejected</option><option value="">All</option></select></div>
+                    <div class="field"><label for="ap-q">Name or email</label><input id="ap-q" name="q" type="search" maxlength="100"></div>
+                </div>
+                <button class="btn btn-secondary" type="submit">Filter</button>
+            </form>
+            <div data-slot="list"></div>
+            <div data-slot="pager"></div>
+        </div>
+    </template>
+    <template id="view-admin-patient-detail">
+        <div class="page">
+            <header class="page-head"><div><p class="mono">Identity review</p><h1 data-slot="name"></h1><p class="sub" data-slot="subtitle"></p></div><div class="row gap wrap" data-slot="actions"></div></header>
+            <div class="banner" data-slot="banner"></div>
+            <div class="bento">
+                <section class="card form-card" aria-labelledby="apd-details"><div class="card-head"><h2 id="apd-details">Submitted details</h2></div><dl class="facts" data-slot="details"></dl></section>
+                <section class="card form-card" aria-labelledby="apd-doc"><div class="card-head"><h2 id="apd-doc">ID document</h2></div><div data-slot="document"></div></section>
+                <section class="card form-card" aria-labelledby="apd-history"><div class="card-head"><h2 id="apd-history">History</h2></div><ol class="timeline" data-slot="history"></ol></section>
+            </div>
+        </div>
+    </template>
     <template id="view-admin-reports">
         <div class="page">
             <header class="page-head"><div><p class="mono">Reports</p><h1>Patient reports</h1></div></header>

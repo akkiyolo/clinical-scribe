@@ -56,6 +56,8 @@ class AdminStatsResponse(BaseModel):
     suspended_doctors: int
     rejected_doctors: int
     open_reports: int
+    pending_patients: int = 0
+    verified_patients: int = 0
     total_patients: int
     total_consults: int
 
