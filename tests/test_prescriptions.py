@@ -276,6 +276,98 @@ class TestSoap:
         assert seen["headers"]["x-goog-api-key"] == "secret-key-value-abc123"
         assert "responseSchema" not in seen["body"]["generationConfig"]
 
+    @pytest.mark.parametrize(
+        "statuses,headers,expect_sleeps,succeeds",
+        [
+            ((503, 503, 200), {}, [2.0, 4.0], True),
+            ((429, 200), {"retry-after": "7"}, [7.0], True),
+            ((503, 200), {"retry-after": "3600"}, [20.0], True),  # capped
+            ((503, 503, 503, 503), {}, [2.0, 4.0, 8.0], False),
+            ((400,), {}, [], False),  # not transient: no retry
+        ],
+    )
+    def test_gemini_client_backs_off_on_transient_errors(
+        self, monkeypatch, statuses, headers, expect_sleeps, succeeds
+    ):
+        import httpx
+
+        monkeypatch.setattr(get_settings(), "LLM_API_KEY", "real-looking-key-123456")
+        sleeps: list[float] = []
+        monkeypatch.setattr("app.services.llm.time.sleep", sleeps.append)
+        replies = iter(statuses)
+
+        class FakeClient:
+            def __init__(self, *a, **k): ...
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, url, json=None, headers=None):
+                status = next(replies)
+                body = {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
+                return httpx.Response(
+                    status,
+                    json=body if status == 200 else {"error": "busy"},
+                    headers=headers_for_status if status != 200 else {},
+                    request=httpx.Request("POST", url),
+                )
+
+        headers_for_status = headers
+        monkeypatch.setattr("app.services.llm.httpx.Client", FakeClient)
+        if succeeds:
+            assert GeminiLLMClient().generate_text("sys", "user") == "ok"
+        else:
+            with pytest.raises(LLMError, match=f"status {statuses[-1]}"):
+                GeminiLLMClient().generate_text("sys", "user")
+        assert sleeps == expect_sleeps
+
+    @pytest.mark.parametrize(
+        "detail,gives_up_at_once",
+        [
+            (  # free tier: 20 requests/day; retrying cannot help
+                {"violations": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]},
+                True,
+            ),
+            ({"retryDelay": "61642s"}, True),  # hours away
+            ({"retryDelay": "12s"}, False),  # per-minute limit: retried
+        ],
+    )
+    def test_gemini_quota_exhaustion_fails_fast_with_a_clear_message(
+        self, monkeypatch, detail, gives_up_at_once
+    ):
+        import httpx
+
+        monkeypatch.setattr(get_settings(), "LLM_API_KEY", "real-looking-key-123456")
+        sleeps: list[float] = []
+        monkeypatch.setattr("app.services.llm.time.sleep", sleeps.append)
+        calls = []
+
+        class FakeClient:
+            def __init__(self, *a, **k): ...
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, url, json=None, headers=None):
+                calls.append(url)
+                error = {"code": 429, "status": "RESOURCE_EXHAUSTED", "details": [detail]}
+                return httpx.Response(
+                    429, json={"error": error}, request=httpx.Request("POST", url)
+                )
+
+        monkeypatch.setattr("app.services.llm.httpx.Client", FakeClient)
+        with pytest.raises(LLMError) as caught:
+            GeminiLLMClient().generate_text("sys", "user")
+        if gives_up_at_once:
+            assert len(calls) == 1 and sleeps == []
+            assert "quota is used up" in str(caught.value)
+        else:
+            assert len(calls) == GeminiLLMClient.ATTEMPTS and "status 429" in str(caught.value)
+
     def test_transcript_cannot_change_after_the_soap_is_approved(self, consulting):
         run_to_prescription(consulting)
         response = consulting.doctor.put(
@@ -1010,3 +1102,64 @@ class TestConcurrentClicks:
                 )
             )
         assert codes == [201, 409, 409, 409]
+
+
+class TestPrescriptionIcd10:
+    """ICD-10 codes on the prescription are the doctor-approved SOAP codes, never the LLM's."""
+
+    def test_draft_carries_the_soap_codes_even_if_the_llm_returns_others(self, consulting, use_llm):
+        use_llm(
+            ScriptedLLM(
+                draft_json(
+                    [
+                        med(
+                            "Ibuprofen",
+                            strength="400 mg",
+                            frequency="twice daily",
+                            duration="5 days",
+                        )
+                    ],
+                    icd10=[{"code": "Z99.9", "description": "Invented by the model"}],
+                )
+            )
+        )
+        rx = run_to_prescription(consulting)
+        assert [c["code"] for c in rx["content"]["icd10"]] == ["G44.2", "M54.2", "R03.0"]
+        assert rx["content"]["icd10"][0] == {
+            "code": "G44.2",
+            "description": "Tension-type headache",
+        }
+
+    def test_codes_edited_by_the_doctor_are_the_ones_used(self, consulting):
+        doc, cid = consulting.doctor, consulting.consult_id
+        doc.put(f"/api/consults/{cid}/transcript", {"transcript_text": FULL})
+        doc.post(f"/api/consults/{cid}/soap/generate")
+        edited = [{"code": "G44.209", "description": "Tension-type headache, unspecified"}]
+        assert doc.put(f"/api/consults/{cid}/soap", {"icd10_codes": edited}).status_code == 200
+        assert doc.post(f"/api/consults/{cid}/soap/approve").status_code == 200
+        consult = doc.get(f"/api/consults/{cid}").json()
+        rx = doc.get(f"/api/prescriptions/{consult['latest_prescription']['id']}").json()
+        assert rx["content"]["icd10"] == edited
+
+    def test_codes_appear_in_the_word_document(self, consulting):
+        rx = run_to_prescription(consulting)
+        with SessionLocal() as db:
+            key = db.get(File, uuid.UUID(rx["docx_file_id"])).s3_key
+        document = Document(io.BytesIO(get_storage_service().download_bytes(key)))
+        cells = [cell.text for table in document.tables for row in table.rows for cell in row.cells]
+        text = "\n".join(cells + [p.text for p in document.paragraphs])
+        assert "G44.2" in text and "R03.0" in text
+
+    def test_drafting_prompt_keeps_existing_medications_out_of_the_rx(self, consulting, use_llm):
+        prompts: list[str] = []
+
+        class Recording(ScriptedLLM):
+            def generate_structured(self, system, user, schema, max_retries=2):
+                if schema.__name__ == "PrescriptionContent":
+                    prompts.append(system)
+                return super().generate_structured(system, user, schema, max_retries)
+
+        use_llm(Recording())
+        run_to_prescription(consulting)
+        assert "ALREADY takes are not new prescriptions" in prompts[0]
+        assert "Only the doctor prescribes" in prompts[0]

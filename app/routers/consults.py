@@ -47,7 +47,7 @@ from app.services.jobs import expire_stale_consult, run_in_background
 from app.services.llm import LLMError
 from app.services.prescription_agent import patient_age, run_prescription_agent
 from app.services.prescriptions import admin_metadata, doctor_full_response, queue_prescription_run
-from app.services.scribe import generate_soap
+from app.services.scribe import assign_speaker_roles, generate_soap
 from app.services.speech import SpeechError, get_stt_service
 from app.services.storage import get_storage_service
 from app.services.uploads import read_validated_upload, store_upload
@@ -321,7 +321,7 @@ def transcribe_job(consult_id: str, file_id: str) -> None:
             storage.download_bytes(record.s3_key), record.original_filename or "audio.webm"
         )
 
-        consult.transcript_text = result.text
+        consult.transcript_text = assign_speaker_roles(result.text)
         consult.transcript_edited = False
         consult.transcription_status = TranscriptionStatus.ready
         consult.error_message = None

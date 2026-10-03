@@ -54,6 +54,14 @@ class GeminiLLMClient(LLMClient):
     """
 
     TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+    # Gemini answers 503 "overloaded" in bursts; back off for ~14 s in total before giving up.
+    BACKOFF_SECONDS = (2.0, 4.0, 8.0)
+    ATTEMPTS = len(BACKOFF_SECONDS) + 1
+    MAX_RETRY_AFTER = 20.0
+    QUOTA_MESSAGE = (
+        "The AI service's usage quota is used up (Gemini returned RESOURCE_EXHAUSTED). "
+        "Try again later, or enable billing on the Google AI project."
+    )
 
     def __init__(self):
         settings = get_settings()
@@ -62,7 +70,7 @@ class GeminiLLMClient(LLMClient):
         self.base_url = settings.LLM_BASE_URL.rstrip("/")
 
     def _call_api(self, system: str, user: str, json_mode: bool = False) -> dict:
-        """Call generateContent, retrying transient failures (timeouts, 429, 5xx) twice."""
+        """Call generateContent, retrying transient failures (timeouts, 429, 5xx) with backoff."""
         if is_placeholder(self.api_key):
             raise LLMError("LLM API key not configured")
 
@@ -77,9 +85,12 @@ class GeminiLLMClient(LLMClient):
         headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
 
         last_error = "LLM service unavailable"
-        for attempt in range(3):
+        retry_after: float | None = None
+        for attempt in range(self.ATTEMPTS):
             if attempt:
-                time.sleep(attempt)
+                default = self.BACKOFF_SECONDS[attempt - 1]
+                time.sleep(default if retry_after is None else retry_after)
+                retry_after = None
             try:
                 with httpx.Client(timeout=60.0) as client:
                     response = client.post(url, json=body, headers=headers)
@@ -90,15 +101,53 @@ class GeminiLLMClient(LLMClient):
                 last_error = "LLM service could not be reached."
                 continue
 
+            if response.status_code == 429 and self._quota_exhausted(response):
+                logger.error("Gemini quota exhausted: %s", response.text[:300])
+                raise LLMError(self.QUOTA_MESSAGE)
             if response.status_code in self.TRANSIENT_STATUS:
                 logger.warning("Gemini transient error: %s", response.status_code)
                 last_error = f"LLM service error (status {response.status_code})"
+                retry_after = self._retry_after(response)
                 continue
             if response.status_code != 200:
                 logger.error("Gemini API error: %s %s", response.status_code, response.text[:300])
                 raise LLMError(f"LLM service error (status {response.status_code})")
             return response.json()
         raise LLMError(last_error)
+
+    def _retry_after(self, response: httpx.Response) -> float | None:
+        """Seconds from a numeric Retry-After header, capped; None when absent or unusable."""
+        try:
+            seconds = float(response.headers.get("retry-after", ""))
+        except ValueError:
+            return None
+        return min(max(seconds, 0.0), self.MAX_RETRY_AFTER)
+
+    def _quota_exhausted(self, response: httpx.Response) -> bool:
+        """True for a 429 that retrying cannot fix: a per-day quota, or a retry delay of minutes+.
+
+        Per-minute rate limits come back with a short retryDelay and are retried as usual.
+        """
+        try:
+            body = response.json()
+        except ValueError:
+            return False
+        error = body.get("error") if isinstance(body, dict) else None
+        details = error.get("details") if isinstance(error, dict) else None
+        for detail in details if isinstance(details, list) else []:
+            if not isinstance(detail, dict):
+                continue
+            for violation in detail.get("violations") or []:
+                if "PerDay" in str(violation.get("quotaId", "")):
+                    return True
+            delay = str(detail.get("retryDelay", ""))
+            if delay.endswith("s"):
+                try:
+                    if float(delay[:-1]) > self.MAX_RETRY_AFTER * 3:
+                        return True
+                except ValueError:
+                    pass
+        return False
 
     def _extract_text(self, result: dict) -> str:
         """Extract text from Gemini API response."""

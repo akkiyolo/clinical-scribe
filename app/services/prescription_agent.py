@@ -243,10 +243,16 @@ STRICT RULES:
 2. NEVER add a medication on your own initiative, and never suggest an alternative.
 3. If dose, frequency or duration is missing in the source, leave that field null. Do not guess.
 4. Copy the diagnosis from the SOAP assessment.
-5. Include ICD-10 codes from the SOAP note.
+5. Leave icd10 empty: it is filled in from the doctor-approved SOAP codes.
 6. Include tests, advice and follow-up from the plan.
 7. For each medication, include a source_quote: the exact snippet of the transcript where the doctor prescribed it.
-8. Return valid JSON only."""
+8. Medications the patient ALREADY takes are not new prescriptions. Leave them out of medications
+   unless the doctor changes them (new dose, frequency or duration) or explicitly prescribes them
+   again. If the doctor only tells the patient to continue or stop one, say so in notes
+   (for example "Continue existing metformin 500 mg twice daily").
+9. Only the doctor prescribes. A medication mentioned only by the patient (lines labelled
+   "Patient:") is history, not a prescription.
+10. Return valid JSON only."""
 
 
 def draft_prescription(state: AgentState) -> dict:
@@ -279,7 +285,21 @@ Generate the prescription content."""
     content = llm.generate_structured(
         system=PRESCRIPTION_SYSTEM_PROMPT, user=user_prompt, schema=PrescriptionContent
     )
-    return {"draft": content.model_dump()}
+    draft = content.model_dump()
+    # The doctor reviewed and approved these codes with the SOAP note; never let the LLM vary them.
+    draft["icd10"] = soap_icd10(soap)
+    return {"draft": draft}
+
+
+def soap_icd10(soap: dict) -> list[dict]:
+    """The approved SOAP note's ICD-10 codes as prescription entries ({code, description})."""
+    codes = []
+    for item in soap.get("icd10_codes") or []:
+        if isinstance(item, dict) and str(item.get("code") or "").strip():
+            codes.append(
+                {"code": str(item["code"]).strip(), "description": item.get("description") or ""}
+            )
+    return codes
 
 
 # ── Node 4: safety check (deterministic) ────────────────────────────────────────
